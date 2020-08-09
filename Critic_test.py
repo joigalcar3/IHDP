@@ -2,6 +2,7 @@ import unittest
 from Critic import Critic
 import numpy as np
 import tensorflow as tf
+import random
 
 
 class TestCritic(unittest.TestCase):
@@ -87,6 +88,7 @@ class TestCritic(unittest.TestCase):
         self.critic1.train_critic_end()
 
     def test_run_train_critic_online(self):
+        random.seed(1)
         Q_weights = [1, 1, 1, 1]
         selected_states = ['velocity', 'alpha', 'theta', 'q']
         number_time_steps = 500
@@ -116,10 +118,10 @@ class TestCritic(unittest.TestCase):
             self.critic1.b['b_' + str(layer + 1)] = trainable_variables[2 * layer + 1].numpy()
 
         for count in range(store_xt.shape[1]):
-            _, dJt_dxt = self.critic1.run_train_critic_online(np.reshape(store_xt[:, count], [4, 1]),
+            Jt, dJt_dxt = self.critic1.run_train_critic_online(np.reshape(store_xt[:, count], [4, 1]),
                                     np.reshape(store_xt_ref[:, count], [4, 1]))
 
-            if (self.critic1.time_step) % self.critic1.batch_size == 0:
+            if (self.critic1.time_step-1) % self.critic1.batch_size == 0:
                 # Part of the algorithm required to test the gradient: definition of W and b
                 trainable_variables = self.critic1.model.trainable_variables
 
@@ -139,6 +141,9 @@ class TestCritic(unittest.TestCase):
                 self.critic1.cache['Z_' + str(layer + 1)] = Z
                 self.critic1.cache['A_' + str(layer + 1)] = a
 
+            # Testing whether the prediction is correct given the weights and biases
+            self.assertAlmostEqual(Jt[0,0], a[0,0], 5)
+
             # Part of the algorithm required to test the gradient: Backward pass
             dA = 1
             for i in range(len(self.critic1.layers)):
@@ -151,13 +156,12 @@ class TestCritic(unittest.TestCase):
                     dZ[dZ_or <= 0] = 0
                 dZ = np.multiply(dA, dZ)
                 dA = np.matmul(self.critic1.W['W_' + str(layer)], dZ)
-            #
-            # self.assertAlmostEqual(dJt_dxt[0, 0, 0], dA[0, 0], 3)
-            # self.assertAlmostEqual(dJt_dxt[0, 1, 0], dA[1, 0], 3)
-            # self.assertAlmostEqual(dJt_dxt[0, 2, 0], dA[2, 0], 3)
-            # self.assertAlmostEqual(dJt_dxt[0, 3, 0], dA[3, 0], 3)
-            # if (self.critic1.time_step + 1) % 50 == 0:
-            #     print(dA)
+
+            # Testing whether the gradients are correctly computed
+            self.assertAlmostEqual(dJt_dxt[0, 0, 0], dA[0, 0], 5)
+            self.assertAlmostEqual(dJt_dxt[0, 1, 0], dA[1, 0], 5)
+            self.assertAlmostEqual(dJt_dxt[0, 2, 0], dA[2, 0], 5)
+            self.assertAlmostEqual(dJt_dxt[0, 3, 0], dA[3, 0], 5)
 
 
 if __name__ == '__main__':

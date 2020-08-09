@@ -30,7 +30,7 @@ __status__ = "Production"
 class Critic:
 
     def __init__(self, Q_weights, selected_states, number_time_steps, gamma=0.8, layers=(10, 1),
-                 activations=("relu", "linear"), batch_size=1, epochs=1):
+                 activations=("relu", "linear"), batch_size=1, epochs=1, activate_tensorboard=False):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
         self.xt = None
@@ -39,7 +39,6 @@ class Critic:
         self.ct = 0
         self.ct_1 = 0
         self.Jt = 0
-        # self.Jt_1 = 0
 
         if len(Q_weights)<self.number_states:
             raise Exception("The size of Q_weights needs to equal the number of states")
@@ -63,10 +62,7 @@ class Critic:
         self.model = None
         self.dJt_dxt = None
         self.tensorboard_callback = None
-        # self.W = {}
-        # self.b = {}
-        # self.cache = {}
-        # self.d_cache = {}
+        self.activate_tensorboard = activate_tensorboard
 
         # Declaration of attributes related to the cost function
         if not(0 <= gamma <= 1):
@@ -97,13 +93,9 @@ class Critic:
                            loss='mean_squared_error',
                            metrics=['accuracy'])
 
-        logdir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.tensorboard_callback = keras.callbacks.TensorBoard(log_dir=logdir)
-
-        # trainable_variables = self.model.trainable_variables
-        # for layer in range(len(trainable_variables / 2)):
-        #     self.W['W_' + str(layer + 1)] = self.model.trainable_variables[2 * layer].numpy()
-        #     self.b['b_' + str(layer + 1)] = self.model.trainable_variables[2 * layer + 1].numpy()
+        if self.activate_tensorboard:
+            logdir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
+            self.tensorboard_callback = keras.callbacks.TensorBoard(log_dir=logdir)
 
     def run_train_critic_online(self, xt, xt_ref):
         """
@@ -125,7 +117,6 @@ class Critic:
 
         self.Jt = prediction.numpy()
         self.dJt_dxt = tape.gradient(prediction, nn_input).numpy()
-        # self.Jt = self.model.predict(nn_input)
 
         target = self.targets_computation_online()
         inputs = np.reshape(self.xt_1, [1, self.number_states, 1])
@@ -133,36 +124,16 @@ class Critic:
         self.store_inputs[self.time_step % self.batch_size, :, :] = inputs
 
         if (self.time_step+1) % self.batch_size == 0:
-            self.model.fit(self.store_inputs, self.store_targets, batch_size=self.batch_size, epochs=self.epochs,
-                           verbose=2, callbacks=[self.tensorboard_callback])
-            # trainable_variables = self.model.trainable_variables
-            # for layer in range(len(trainable_variables / 2)):
-            #     self.W['W_' + str(layer + 1)] = self.model.trainable_variables[2 * layer].numpy()
-            #     self.b['b_' + str(layer + 1)] = self.model.trainable_variables[2 * layer + 1].numpy()
-
+            if self.activate_tensorboard:
+                self.model.fit(self.store_inputs, self.store_targets, batch_size=self.batch_size, epochs=self.epochs,
+                               verbose=2, callbacks=[self.tensorboard_callback])
+            else:
+                self.model.fit(self.store_inputs, self.store_targets, batch_size=self.batch_size, epochs=self.epochs,
+                               verbose=2)
         self.time_step += 1
         self.ct_1 = self.ct
         self.xt_1 = self.xt
         return self.Jt, self.dJt_dxt
-
-    # def compute_gradient_Jt_xt(self, xt):
-    #     # Forward pass
-    #     a = xt
-    #     for layer in range(len(self.layers)):
-    #         Z = np.matmul(self.W['W_' + str(layer+1)], a) + self.b['b_' + str(layer+1)]
-    #         try:
-    #             a = tf.keras.activations.deserialize(self.layers[layer])(Z.astype('float64')).numpy()
-    #         except:
-    #             a = tf.keras.activations.deserialize(self.layers[layer])(Z.astype('float64'))
-    #         self.cache['Z_' + str(layer + 1)] = Z
-    #         self.cache['A_' + str(layer + 1)] = a
-    #     self.Jt = a
-    #
-    #     # Backward pass
-    #     for layer in range(len(self.layers)):
-    #         dZ =
-
-
 
     def run_critic(self, xt, xt_ref):
         """
@@ -190,10 +161,7 @@ class Critic:
         :return:
         """
         targets = self.targets_computation_end()
-        # outputs = self.J
         inputs = self.store_states[:-1, :, :]
-        # train_dataset = tf.data.Dataset.from_tensor_slices((outputs, targets))
-        # train_dataset = train_dataset.shuffle(buffer_size=1024).batch(self.batch_size)
 
         self.model.fit(inputs, targets, batch_size=self.batch_size, epochs=self.epochs, verbose=2)
 
