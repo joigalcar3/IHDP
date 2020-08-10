@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Provides class Critic with the function approximator (NN) of the Critic
 
-IncrementalModel creates the Neural Network model with Tensorflow and it can train the network online or at the
+Critic creates the Neural Network model with Tensorflow and it can train the network online or at the
 end of the episode. The user can decide the number of layers, the number of neurons, the batch size and the number
 of epochs and activation functions. If trained online, the algorithm trains the Network after the number of collected
 data points equals the batch size. This means that if the batch size is 10, then the NN is updated every 10 time steps.

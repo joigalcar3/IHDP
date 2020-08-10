@@ -1,12 +1,13 @@
 #!/usr/bin/env python
-"""Provides class Critic with the function approximator (NN) of the Critic
+"""Provides class Actor with the function approximator (NN) of the Actor
 
-IncrementalModel creates the Neural Network model with Tensorflow and it can train the network online or at the
-end of the episode. The user can decide the number of layers, the number of neurons, the batch size and the number
-of epochs and activation functions. If trained online, the algorithm trains the Network after the number of collected
-data points equals the batch size. This means that if the batch size is 10, then the NN is updated every 10 time steps.
+Actor creates the Neural Network model with Tensorflow and it can train the network online.
+The user can decide the number of layers, the number of neurons, the batch size and the number
+of epochs and activation functions.
 """
-
+# TODO: implement the variable learning rate
+# TODO: implement the actor model with two neural networks, exploiting the physical model information
+# TODO: implement the code that runs the complete algorithm
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten
@@ -26,7 +27,7 @@ __status__ = "Production"
 
 class Actor:
     def __init__(self, selected_inputs, selected_states, number_time_steps, layers=(10, 1),
-                 activations=('lrelu', 'linear'), batch_size=1, epochs=1):
+                 activations=('relu', 'linear'), batch_size=1, epochs=1, learning_rate=0.8, WB_limits=30):
         self.number_inputs = len(selected_inputs)
         self.number_states = len(selected_states)
         self.xt = None
@@ -46,9 +47,15 @@ class Actor:
         self.activations = activations
         self.batch_size = batch_size
         self.epochs = epochs
+        self.learning_rate = learning_rate
+        self.WB_limits = WB_limits
 
-        self.W = {}
-        self.b = {}
+        # self.W = {}
+        # self.b = {}
+
+        # Attributes related to the training of the NN
+        self.dJt_dWb = None
+        self.dJt_dWb_1 = None
 
     def build_actor_model(self):
         """
@@ -58,29 +65,80 @@ class Actor:
         """
         initializer = tf.keras.initializers.GlorotNormal()
         self.model = tf.keras.Sequential()
-        self.model.add(Flatten(input_shape=(self.number_states, 1), name='Flatten_1'))
+        self.model.add(Flatten(input_shape=(self.number_states * 2, 1), name='Flatten_1'))
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
                              name='dense_1'))
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+2)))
-        self.model.compile(optimizer='adam',
+        self.model.compile(optimizer='SGD',
                            loss='mean_squared_error',
                            metrics=['accuracy'])
-        trainable_variables = self.model.trainable_variables
+        # trainable_variables = self.model.trainable_variables
+        #
+        # for layer in range(int(len(trainable_variables) / 2)):
+        #     self.W['W_' + str(layer+1)] = self.model.trainable_variables[2 * layer].numpy()
+        #     self.b['b_' + str(layer+1)] = self.model.trainable_variables[2 * layer + 1].numpy()
 
-        for layer in range(len(trainable_variables/2)):
-            self.W['W_' + str(layer+1)] = self.model.trainable_variables[2 * layer]
-            self.b['b_' + str(layer+1)] = self.model.trainable_variables[2 * layer + 1]
+    def run_actor_online(self, xt, xt_ref):
+        """
+        Generate input to the system with the reference and real states.
+        :param xt: current time_step states
+        :param xt_ref: current time step reference states
+        :return: ut --> input to the system and the incremental model
+        """
+        self.xt = xt
+        self.xt_ref = xt_ref
 
-    def derivative_relu(self, x):
-        if x > 0:
-            return 1
-        else:
-            return 0
+        nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+        with tf.GradientTape() as tape:
+            tape.watch(self.model.trainable_variables)
+            ut = self.model(nn_input)
+        self.dJt_dWb = tape.gradient(ut, self.model.trainable_variables)
+        # ut = self.model(nn_input)
 
-    def derivative_linear(self, x):
-        return 1
+        e0 = self.compute_persistent_excitation()
+        self.ut = ut + e0
+        self.time_step += 1
+
+        return self.ut.numpy()
+
+    def train_actor_online(self, Jt, critic_derivative, G):
+        """
+        Obtains the elements of the chain rule, computes the gradient and applies it to the corresponding weights and
+        biases.
+        :param Jt: dEa/dJ
+        :param critic_derivative: dJ/dx
+        :param G: dx/du, obtained from the incremental model
+        :return:
+        """
+        Jt = Jt.flatten()[0]
+        critic_derivative = np.reshape(critic_derivative, [self.number_states, 1])
+        chain_rule = Jt * np.matmul(G.T, critic_derivative)
+        chain_rule = chain_rule.flatten()[0]
+        for count in range(len(self.dJt_dWb)):
+            update = chain_rule * self.dJt_dWb
+            self.model.trainable_variables[count].assign_sub(self.learning_rate * update)
+
+            # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+            WB_variable = self.model.trainable_variables[count].numpy()
+            WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+            WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+            self.model.trainable_variables[count].assign(WB_variable)
+
+        self.dJt_dWb_1 = self.dJt_dWb
+
+    def compute_persistent_excitation(self):
+        """
+        Computation of the persistent excitation at each time step. Formula obtained from Pedro's thesis
+        :return: e0 --> PE deviation
+        """
+        t = self.time_step+1
+        e0 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
+                        np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
+                        np.cos(2.4 * t) * np.sin(2.4 * t) ** 3) / 10
+        return e0
+
 
 
 
@@ -90,4 +148,10 @@ if __name__ == '__main__':
     number_time_steps = 500
 
     actor = Actor(selected_inputs, selected_states, number_time_steps)
-    actor.build_critic_model()
+    actor.build_actor_model()
+
+    xt = np.array([[1], [2], [3], [4]])
+    xt_ref = np.array([[2], [3], [4], [5]])
+    actor.run_actor_online(xt, xt_ref)
+    # actor.model.optimizer.learning_rate = tf.Variable(name='learning_rate:0', dtype='float32', shape=(),
+    #                                                   initial_value=10)

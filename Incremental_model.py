@@ -23,7 +23,8 @@ __status__ = "Production"
 
 class IncrementalModel:
 
-    def __init__(self, selected_states, selected_input, number_time_steps):
+    def __init__(self, selected_states, selected_input, number_time_steps, discretisation_time=0.5,
+                 input_magnitude_limits=25, input_rate_limits=60):
         # Define the inputs to the incremental model
         self.xt_1 = None
         self.xt = None
@@ -40,6 +41,7 @@ class IncrementalModel:
         self.L = 2 * (self.number_inputs+self.number_states)
         self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
         self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))
+        self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
 
         # Define the system identification matrices
         self.F = None
@@ -47,6 +49,11 @@ class IncrementalModel:
 
         # Define the time variable
         self.time_step = 0
+        self.discretisation_time = discretisation_time
+
+        # Limitations of the system
+        self.input_magnitude_limits = input_magnitude_limits
+        self.input_rate_limits = input_rate_limits
 
     def build_A_LS_matrix(self):
         """
@@ -88,9 +95,20 @@ class IncrementalModel:
         :param ut: current time step input
         :return:
         """
+        # Verifying that the inputs meets the platforms constraints
+        if self.time_step != 0:
+            ut_1 = self.store_input[:, self.time_step-1]
+        else:
+            ut_1 = ut
+        ut = max(min(max(min(ut,
+                                         ut_1 + self.input_rate_limits * self.discretisation_time),
+                                  ut_1 - self.input_rate_limits * self.discretisation_time),
+                           self.input_magnitude_limits),
+                    - self.input_magnitude_limits)
         # Store the input variables
         self.xt = xt
         self.ut = ut
+        self.store_input[:, self.time_step] = np.reshape(ut, [ut.shape[0]])
 
         # Obtain the A matrix and the x vector
         A_LS_matrix = self.build_A_LS_matrix()

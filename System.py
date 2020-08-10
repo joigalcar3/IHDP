@@ -56,7 +56,8 @@ class F16System(System):
     linear system.
     """
 
-    def __init__(self, folder, selected_states, selected_output, selected_input, discretisation_time = 0.5):
+    def __init__(self, folder, selected_states, selected_output, selected_input, discretisation_time = 0.5,
+                 input_magnitude_limits=25, input_rate_limits=60):
         super().__init__()
         self.folder = folder                             # Folder where the data is located
         self.discretisation_time = discretisation_time
@@ -82,6 +83,10 @@ class F16System(System):
         self.filt_B = None
         self.filt_C = None
         self.filt_D = None
+
+        # Limitations of the system
+        self.input_magnitude_limits = input_magnitude_limits
+        self.input_rate_limits = input_rate_limits
 
     def import_linear_system(self):
         """
@@ -171,6 +176,15 @@ class F16System(System):
         :return: xt1 --> the next time step state
                 yt --> the current output
         """
+        if self.time_step != 0:
+            ut_1 = self.store_input[:, self.time_step-1]
+        else:
+            ut_1 = ut
+        ut = max(min(max(min(ut,
+                                         ut_1 + self.input_rate_limits * self.discretisation_time),
+                                  ut_1 - self.input_rate_limits * self.discretisation_time),
+                           self.input_magnitude_limits),
+                    -self.input_magnitude_limits)
         xt1 = np.matmul(self.filt_A, self.xt) + np.matmul(self.filt_B, ut)
         yt = np.matmul(self.filt_C, self.xt) + np.matmul(self.filt_D, ut)
 
