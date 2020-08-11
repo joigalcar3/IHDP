@@ -30,7 +30,7 @@ __status__ = "Production"
 class Critic:
 
     def __init__(self, Q_weights, selected_states, number_time_steps, gamma=0.8, layers=(10, 1),
-                 activations=("relu", "linear"), batch_size=1, epochs=1, activate_tensorboard=False):
+                 activations=("tanh", "linear"), batch_size=1, epochs=1, activate_tensorboard=False):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
         self.xt = None
@@ -134,6 +134,21 @@ class Critic:
         self.ct_1 = self.ct
         self.xt_1 = self.xt
         return self.Jt, self.dJt_dxt
+
+    def evaluate_critic(self, xt):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt).
+        :param xt: current time step states
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        nn_input = tf.constant(np.array([xt]).astype('float32'))
+        with tf.GradientTape() as tape:
+            tape.watch(nn_input)
+            prediction = self.model(nn_input)
+
+        Jt = prediction.numpy()
+        dJt_dxt = tape.gradient(prediction, nn_input).numpy()
+        return Jt, dJt_dxt
 
     def run_critic(self, xt, xt_ref):
         """

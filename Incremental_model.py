@@ -40,7 +40,9 @@ class IncrementalModel:
         self.number_inputs = len(selected_input)
         self.L = 2 * (self.number_inputs+self.number_states)
         self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
+        self.store_delta_xt_0 = np.random.rand(self.number_states, self.L)/10
         self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))
+        self.store_delta_ut_0 = np.random.rand(self.number_inputs,  self.L)/10
         self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
 
         # Define the system identification matrices
@@ -65,11 +67,13 @@ class IncrementalModel:
             u_component = np.flip(self.store_delta_ut[:, self.time_step-self.L:self.time_step], 1).T
         else:
             x_component_1 = np.flip(self.store_delta_xt[:, :self.time_step], 1).T
-            x_component_2 = np.zeros((self.L-self.time_step, self.number_states))
+            x_component_2 = self.store_delta_xt_0[:, :self.L - self.time_step].T
+            # x_component_2 = np.zeros((self.L - self.time_step, self.number_states))
             x_component = np.vstack((x_component_1, x_component_2))
 
             u_component_1 = np.flip(self.store_delta_ut[:, :self.time_step], 1).T
-            u_component_2 = np.zeros((self.L - self.time_step, self.number_inputs))
+            u_component_2 = self.store_delta_ut_0[:, :self.L - self.time_step].T
+            # u_component_2 = np.zeros((self.L - self.time_step, self.number_inputs))
             u_component = np.vstack((u_component_1, u_component_2))
         A_LS_matrix = np.hstack((x_component, u_component))
         return A_LS_matrix
@@ -79,13 +83,22 @@ class IncrementalModel:
         Builds the x vector required in the Least Squares of the online system identification
         :return: x_LS_vector--> x vector required in the LS
         """
+        if self.time_step == 0:
+            self.xt_1 = self.xt
+            self.ut_1 = self.ut
         # Computation and storage of the gradients
         self.delta_xt = self.xt - self.xt_1
         self.delta_ut = self.ut - self.ut_1
         self.store_delta_xt[:, self.time_step] = np.reshape(self.delta_xt, [self.delta_xt.shape[0]])
         self.store_delta_ut[:, self.time_step] = np.reshape(self.delta_ut, [self.delta_ut.shape[0]])
+        if self.time_step >= self.L:
+            x_LS_vector = np.flip(self.store_delta_xt[:, self.time_step-self.L+1:self.time_step+1], 1).T
+        else:
+            x_component_1 = np.flip(self.store_delta_xt[:, :self.time_step + 1], 1).T
+            x_component_2 = self.store_delta_xt_0[:, :self.L - self.time_step - 1].T
+            # x_component_2 = np.zeros((self.L - self.time_step, self.number_states))
+            x_LS_vector = np.vstack((x_component_1, x_component_2))
 
-        x_LS_vector = np.flip(self.store_delta_xt[:, self.time_step-self.L+1:], 1).T
         return x_LS_vector
 
     def identify_incremental_model_LS(self, xt, ut):
@@ -101,10 +114,10 @@ class IncrementalModel:
         else:
             ut_1 = ut
         ut = max(min(max(min(ut,
-                                         ut_1 + self.input_rate_limits * self.discretisation_time),
-                                  ut_1 - self.input_rate_limits * self.discretisation_time),
-                           self.input_magnitude_limits),
-                    - self.input_magnitude_limits)
+                             np.array([ut_1 + self.input_rate_limits * self.discretisation_time])),
+                         np.array([ut_1 - self.input_rate_limits * self.discretisation_time])),
+                     np.array([[self.input_magnitude_limits]])),
+                 - np.array([[self.input_magnitude_limits]]))
         # Store the input variables
         self.xt = xt
         self.ut = ut
@@ -117,6 +130,8 @@ class IncrementalModel:
                                         x_LS_vector).T
         self.F = identified_matrices[:, :self.number_states]
         self.G = identified_matrices[:, self.number_states:]
+
+        return self.G
 
     def evaluate_incremental_model(self):
         """

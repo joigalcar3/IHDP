@@ -50,16 +50,17 @@ class System:
     def run_step(self, ut):
         pass
 
+
 class F16System(System):
     """
     System block of the F-16 aircraft that acts as the real system. At the moment, it only takes the matrices of a
     linear system.
     """
 
-    def __init__(self, folder, selected_states, selected_output, selected_input, discretisation_time = 0.5,
+    def __init__(self, folder, selected_states, selected_output, selected_input, discretisation_time=0.5,
                  input_magnitude_limits=25, input_rate_limits=60):
         super().__init__()
-        self.folder = folder                             # Folder where the data is located
+        self.folder = folder  # Folder where the data is located
         self.discretisation_time = discretisation_time
 
         # Selected data for the system
@@ -167,7 +168,7 @@ class F16System(System):
 
         self.x0 = x0
         self.xt = x0
-        self.store_states[:, self.time_step] = self.xt
+        self.store_states[:, self.time_step] = np.reshape(self.xt, [-1, ])
 
     def run_step(self, ut):
         """
@@ -177,16 +178,16 @@ class F16System(System):
                 yt --> the current output
         """
         if self.time_step != 0:
-            ut_1 = self.store_input[:, self.time_step-1]
+            ut_1 = self.store_input[:, self.time_step - 1]
         else:
             ut_1 = ut
         ut = max(min(max(min(ut,
-                                         ut_1 + self.input_rate_limits * self.discretisation_time),
-                                  ut_1 - self.input_rate_limits * self.discretisation_time),
-                           self.input_magnitude_limits),
-                    -self.input_magnitude_limits)
-        xt1 = np.matmul(self.filt_A, self.xt) + np.matmul(self.filt_B, ut)
-        yt = np.matmul(self.filt_C, self.xt) + np.matmul(self.filt_D, ut)
+                             np.array([ut_1 + self.input_rate_limits * self.discretisation_time])),
+                         np.array([ut_1 - self.input_rate_limits * self.discretisation_time])),
+                     np.array([[self.input_magnitude_limits]])),
+                 - np.array([[self.input_magnitude_limits]]))
+        xt1 = np.matmul(self.filt_A, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_B, np.reshape(ut, [-1, 1]))
+        yt = np.matmul(self.filt_C, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_D, np.reshape(ut, [-1, 1]))
 
         self.store_input[:, self.time_step] = np.reshape(ut, [ut.shape[0]])
         self.store_states[:, self.time_step + 1] = np.reshape(xt1, [xt1.shape[0]])
@@ -198,7 +199,7 @@ class F16System(System):
 
 
 if __name__ == "__main__":
-    selected_states = ['velocity', 'alpha', 'theta',  'q']
+    selected_states = ['velocity', 'alpha', 'theta', 'q']
     selected_output = ['alpha', 'q']
     selected_input = ['ele']
     discretisation_time = 0.5

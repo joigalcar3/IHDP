@@ -128,6 +128,74 @@ class TestActor(unittest.TestCase):
                                np.reshape(b2, [-1, 1])[0, 0] - 15, 5)
 
 
+    def test_train_actor_online_adam(self):
+        selected_inputs = ['ele']
+        selected_states = ['velocity', 'alpha', 'theta', 'q']
+        number_time_steps = 500
+        layers = [2, 1]
+        learning_rate = 1
+        self.actor = Actor(selected_inputs, selected_states, number_time_steps, layers=layers,
+                           learning_rate=learning_rate)
+
+        Jt = np.array([1])
+        critic_derivative = np.array([[1], [1], [1], [1]])
+        G = np.array([[0], [1], [0], [2]])
+
+        self.actor.build_actor_model()
+        W1 = self.actor.model.trainable_variables[0].numpy()
+        W2 = self.actor.model.trainable_variables[2].numpy()
+        b1 = self.actor.model.trainable_variables[1].numpy()
+        b2 = self.actor.model.trainable_variables[3].numpy()
+
+        dW1 = tf.Variable(np.array([[1, 2], [3, 4], [5, 6], [7, 8], [1, 2], [3, 4], [5, 6], [7, 11]], dtype='float32'))
+        db1 = tf.Variable(np.array([[1], [3]], dtype='float32'))
+        dW2 = tf.Variable(np.array([[2], [4]], dtype='float32'))
+        db2 = tf.Variable(np.array([[5]], dtype='float32'))
+        gradients = [dW1, db1, dW2, db2]
+        self.actor.dJt_dWb = gradients
+
+        # Computing Adam parameters
+        beta_1 = 0.9
+        beta_2 = 0.999
+        epsilon = 1e-07
+        t = 1
+        Vd = [tf.Variable((1-beta_1)/(1-beta_1**t) * gradients[i].numpy())
+              for i in range(len(gradients))]      # Momentum term
+        Sd = [tf.Variable((1-beta_2)/(1-beta_2**t) * np.square(gradients[i].numpy()))
+              for i in range(len(gradients))]      # RMSProp term
+        final_gradient = [tf.Variable(np.divide(Vd[i].numpy(), np.sqrt(Sd[i].numpy()) + epsilon))
+                          for i in range(len(gradients))]  # Implemented Adam for the first iteration
+
+        # Check that the input gradients lead to the expected result
+        general_update = learning_rate * Jt.flatten() * np.matmul(G.T, critic_derivative).flatten()[0]  # should be 3
+        self.assertEqual(general_update, 3)
+
+        self.actor.train_actor_online_adam(Jt, critic_derivative, G)
+
+        # Check that the updated weights and biases correspond to their expected values
+        self.assertAlmostEqual(self.actor.model.trainable_variables[0].numpy()[5, 0],
+                               W1[5, 0] - final_gradient[0].numpy()[5, 0], 5)
+        self.assertAlmostEqual(self.actor.model.trainable_variables[0].numpy()[2, 1],
+                               W1[2, 1] - final_gradient[0].numpy()[2, 1], 5)
+        self.assertAlmostEqual(self.actor.model.trainable_variables[0].numpy()[7, 1],
+                               W1[7, 1] - final_gradient[0].numpy()[7, 1], 5)
+        self.assertAlmostEqual(self.actor.model.trainable_variables[0].numpy()[5, 1],
+                               W1[5, 1] - final_gradient[0].numpy()[5, 1], 5)
+
+        self.assertAlmostEqual(np.reshape(self.actor.model.trainable_variables[1].numpy(), [-1, 1])[0, 0],
+                               np.reshape(b1, [-1, 1])[0, 0] - final_gradient[1].numpy()[0, 0], 5)
+        self.assertAlmostEqual(np.reshape(self.actor.model.trainable_variables[1].numpy(), [-1, 1])[1, 0],
+                               np.reshape(b1, [-1, 1])[1, 0] - final_gradient[1].numpy()[1, 0], 5)
+
+        self.assertAlmostEqual(np.reshape(self.actor.model.trainable_variables[2].numpy(), [-1, 1])[0, 0],
+                               np.reshape(W2, [-1, 1])[0, 0] - final_gradient[2].numpy()[0, 0], 5)
+        self.assertAlmostEqual(np.reshape(self.actor.model.trainable_variables[2].numpy(), [-1, 1])[1, 0],
+                               np.reshape(W2, [-1, 1])[1, 0] - final_gradient[2].numpy()[1, 0], 5)
+
+        self.assertAlmostEqual(np.reshape(self.actor.model.trainable_variables[3].numpy(), [-1, 1])[0, 0],
+                               np.reshape(b2, [-1, 1])[0, 0] - final_gradient[3].numpy()[0, 0], 5)
+
+
 
 if __name__ == '__main__':
     unittest.main()

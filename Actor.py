@@ -29,7 +29,7 @@ __status__ = "Production"
 
 class Actor:
     def __init__(self, selected_inputs, selected_states, number_time_steps, layers=(10, 1),
-                 activations=('relu', 'linear'), batch_size=1, epochs=1, learning_rate=0.8, WB_limits=30):
+                 activations=('tanh', 'linear'), batch_size=1, epochs=1, learning_rate=10, WB_limits=30):
         self.number_inputs = len(selected_inputs)
         self.number_states = len(selected_states)
         self.xt = None
@@ -52,12 +52,13 @@ class Actor:
         self.learning_rate = learning_rate
         self.WB_limits = WB_limits
 
-        # self.W = {}
-        # self.b = {}
 
         # Attributes related to the training of the NN
         self.dJt_dWb = None
         self.dJt_dWb_1 = None
+
+        # Attributes related to the Adam optimizer
+        self.Adam_opt = None
 
     def build_actor_model(self):
         """
@@ -130,17 +131,39 @@ class Actor:
 
         self.dJt_dWb_1 = self.dJt_dWb
 
-        # img = tf.Variable(img)
-        # opt = tf.optimizers.Adam(learning_rate=lr, decay=1e-6)
-        #
-        # for _ in range(epoch):
-        #     with tf.GradientTape() as tape:
-        #         tape.watch(img)
-        #         y = model(img.value())[:, :, :, filter]
-        #         loss = -tf.math.reduce_mean(y)
-        #
-        #     grads = tape.gradient(loss, img)
-        #     opt.apply_gradients(zip([grads], [img]))
+    def train_actor_online_adam(self, Jt, critic_derivative, G):
+        """
+        Obtains the elements of the chain rule, computes the gradient and applies it to the corresponding weights and
+        biases with the Adam optimizer.
+        :param Jt: dEa/dJ
+        :param critic_derivative: dJ/dx
+        :param G: dx/du, obtained from the incremental model
+        :return:
+        """
+        # Set up the Adam optimizer
+        if self.time_step == 0:
+            self.Adam_opt = tf.optimizers.Adam(learning_rate=self.learning_rate, decay=1e-6)
+        Jt = Jt.flatten()[0]
+        critic_derivative = np.reshape(critic_derivative, [self.number_states, 1])
+        chain_rule = Jt * np.matmul(G.T, critic_derivative)
+        chain_rule = chain_rule.flatten()[0]
+        update = [tf.Variable(chain_rule * self.dJt_dWb[i]) for i in range(len(self.dJt_dWb))]
+        update = [tf.Variable(np.reshape(update[i].numpy(), [-1, ]))
+                  if len(self.model.trainable_variables[i].shape) == 1
+                  else np.reshape(update[i].numpy(), [-1, self.model.trainable_variables[i].shape[1]])
+                  for i in range(len(update))]
+
+        # Apply the Adam optimizer
+        self.Adam_opt.apply_gradients(zip(update, self.model.trainable_variables))
+
+        for count in range(len(self.dJt_dWb)):
+            # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+            WB_variable = self.model.trainable_variables[count].numpy()
+            WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+            WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+            self.model.trainable_variables[count].assign(WB_variable)
+
+        self.dJt_dWb_1 = self.dJt_dWb
 
     def compute_persistent_excitation(self):
         """
@@ -169,3 +192,4 @@ if __name__ == '__main__':
     actor.run_actor_online(xt, xt_ref)
     # actor.model.optimizer.learning_rate = tf.Variable(name='learning_rate:0', dtype='float32', shape=(),
     #                                                   initial_value=10)
+
