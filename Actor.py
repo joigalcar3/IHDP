@@ -8,6 +8,8 @@ of epochs and activation functions.
 # TODO: implement the variable learning rate
 # TODO: implement the actor model with two neural networks, exploiting the physical model information
 # TODO: implement the code that runs the complete algorithm
+# TODO: implement batches
+# TODO: implement multiple inputs
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten
@@ -117,8 +119,8 @@ class Actor:
         chain_rule = Jt * np.matmul(G.T, critic_derivative)
         chain_rule = chain_rule.flatten()[0]
         for count in range(len(self.dJt_dWb)):
-            update = chain_rule * self.dJt_dWb
-            self.model.trainable_variables[count].assign_sub(self.learning_rate * update)
+            update = chain_rule * self.dJt_dWb[count]
+            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
 
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
             WB_variable = self.model.trainable_variables[count].numpy()
@@ -127,6 +129,18 @@ class Actor:
             self.model.trainable_variables[count].assign(WB_variable)
 
         self.dJt_dWb_1 = self.dJt_dWb
+
+        # img = tf.Variable(img)
+        # opt = tf.optimizers.Adam(learning_rate=lr, decay=1e-6)
+        #
+        # for _ in range(epoch):
+        #     with tf.GradientTape() as tape:
+        #         tape.watch(img)
+        #         y = model(img.value())[:, :, :, filter]
+        #         loss = -tf.math.reduce_mean(y)
+        #
+        #     grads = tape.gradient(loss, img)
+        #     opt.apply_gradients(zip([grads], [img]))
 
     def compute_persistent_excitation(self):
         """
