@@ -30,11 +30,12 @@ class System:
         # Storing arrays
         self.store_states = None
         self.store_input = None
-        self.store_output = None
+        # self.store_output = None
 
         # Current state, input and output
         self.x0 = None
         self.xt = None
+        self.xt1 = None
         self.yt = None
         self.ut = None
 
@@ -164,7 +165,7 @@ class F16System(System):
 
         self.store_states = np.zeros((self.number_states, self.number_time_steps + 1))
         self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
-        self.store_output = np.zeros((self.number_outputs, self.number_time_steps))
+        # self.store_output = np.zeros((self.number_outputs, self.number_time_steps))
 
         self.x0 = x0
         self.xt = x0
@@ -175,27 +176,33 @@ class F16System(System):
         Runs one time step of the iteration.
         :param ut: input to the system
         :return: xt1 --> the next time step state
-                yt --> the current output
         """
         if self.time_step != 0:
             ut_1 = self.store_input[:, self.time_step - 1]
         else:
             ut_1 = ut
         ut = max(min(max(min(ut,
-                             np.array([ut_1 + self.input_rate_limits * self.discretisation_time])),
-                         np.array([ut_1 - self.input_rate_limits * self.discretisation_time])),
+                             np.reshape(np.array([ut_1 + self.input_rate_limits * self.discretisation_time]), [-1, 1])),
+                         np.reshape(np.array([ut_1 - self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                      np.array([[self.input_magnitude_limits]])),
                  - np.array([[self.input_magnitude_limits]]))
-        xt1 = np.matmul(self.filt_A, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_B, np.reshape(ut, [-1, 1]))
-        yt = np.matmul(self.filt_C, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_D, np.reshape(ut, [-1, 1]))
+        self.xt1 = np.matmul(self.filt_A, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_B, np.reshape(ut, [-1, 1]))
+        # yt = np.matmul(self.filt_C, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_D, np.reshape(ut, [-1, 1]))
 
         self.store_input[:, self.time_step] = np.reshape(ut, [ut.shape[0]])
-        self.store_states[:, self.time_step + 1] = np.reshape(xt1, [xt1.shape[0]])
-        self.store_output[:, self.time_step] = np.reshape(yt, [yt.shape[0]])
+        self.store_states[:, self.time_step + 1] = np.reshape(self.xt1, [self.xt1.shape[0]])
+        # self.store_output[:, self.time_step] = np.reshape(yt, [yt.shape[0]])
 
-        self.xt = xt1
+        return self.xt1
+
+    def update_system_attributes(self):
+        """
+        The attributes that change with every time step are updated
+        :return:
+        """
+        self.xt = self.xt1
         self.time_step += 1
-        return xt1, yt
+
 
 
 if __name__ == "__main__":

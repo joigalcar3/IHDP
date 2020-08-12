@@ -5,9 +5,9 @@ Actor creates the Neural Network model with Tensorflow and it can train the netw
 The user can decide the number of layers, the number of neurons, the batch size and the number
 of epochs and activation functions.
 """
-# TODO: implement the variable learning rate
+# TODO: implement the variable learning rate --> DONE
 # TODO: implement the actor model with two neural networks, exploiting the physical model information
-# TODO: implement the code that runs the complete algorithm
+# TODO: implement the code that runs the complete algorithm --> DONE
 # TODO: implement batches
 # TODO: implement multiple inputs
 import numpy as np
@@ -28,7 +28,7 @@ __status__ = "Production"
 
 
 class Actor:
-    def __init__(self, selected_inputs, selected_states, number_time_steps, layers=(10, 1),
+    def __init__(self, selected_inputs, selected_states, number_time_steps, layers=(6, 1),
                  activations=('tanh', 'linear'), batch_size=1, epochs=1, learning_rate=10, WB_limits=30):
         self.number_inputs = len(selected_inputs)
         self.number_states = len(selected_states)
@@ -77,11 +77,6 @@ class Actor:
         self.model.compile(optimizer='SGD',
                            loss='mean_squared_error',
                            metrics=['accuracy'])
-        # trainable_variables = self.model.trainable_variables
-        #
-        # for layer in range(int(len(trainable_variables) / 2)):
-        #     self.W['W_' + str(layer+1)] = self.model.trainable_variables[2 * layer].numpy()
-        #     self.b['b_' + str(layer+1)] = self.model.trainable_variables[2 * layer + 1].numpy()
 
     def run_actor_online(self, xt, xt_ref):
         """
@@ -102,7 +97,6 @@ class Actor:
 
         e0 = self.compute_persistent_excitation()
         self.ut = ut + e0
-        self.time_step += 1
 
         return self.ut.numpy()
 
@@ -129,7 +123,44 @@ class Actor:
             WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
             self.model.trainable_variables[count].assign(WB_variable)
 
-        self.dJt_dWb_1 = self.dJt_dWb
+    def train_actor_online_adaptive_alpha(self, Jt1, dJt1_dxt1, G, indices_tracking_states, incremental_model, critic):
+        """
+        Train the actor with an adaptive alpha depending on the sign and magnitude of the network errors
+        :param Jt1: the evaluation of the critic with the next time step prediction of the incremental model
+        :param dJt1_dxt1: the gradient of the critic network with respect to the next time prediction of the incremental model
+        :param G: the input distribution matrix
+        :param indices_tracking_states: the states of the system that are being tracked
+        :param incremental_model: the incremental model
+        :param critic: the critic
+        :return:
+        """
+        weight_cache = [tf.Variable(self.model.trainable_variables[i].numpy()) for i in
+                        range(len(self.model.trainable_variables))]
+        network_improvement = False
+        n_reductions = 0
+        while not network_improvement:
+            # Train the actor
+            self.train_actor_online(Jt1, dJt1_dxt1, G[indices_tracking_states, :])
+
+            # Code for checking if the actor NN error with the new weights has changed sign
+            ut_after = self.evaluate_actor()
+            xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
+            Jt1_after, _ = critic.evaluate_critic(xt1_est_after[indices_tracking_states, :])
+            Ec_actor_before = 0.5 * np.square(Jt1_after)
+            print("ACTOR LOSS = ", Ec_actor_before)
+
+            # Code for checking whether the learning rate of the actor should be halved
+            if np.square(Jt1_after) <= (np.square(Jt1)) or n_reductions > 10:
+                network_improvement = True
+                if np.sign(Jt1) == np.sign(Jt1_after):
+                    self.learning_rate = 2 * self.learning_rate
+            else:
+                n_reductions += 1
+                self.learning_rate = self.learning_rate / 2
+                for WB_count in range(len(self.model.trainable_variables)):
+                    self.model.trainable_variables[WB_count].assign(weight_cache[WB_count].numpy())
+
+
 
     def train_actor_online_adam(self, Jt, critic_derivative, G):
         """
@@ -154,7 +185,7 @@ class Actor:
                   for i in range(len(update))]
 
         # Apply the Adam optimizer
-        self.Adam_opt.apply_gradients(zip(update, self.model.trainable_variables))
+        self.Adam_opt.apply_gradients(zip(update, [self.model.trainable_variables[i].numpy() for i in range(len(self.model.trainable_variables))]))
 
         for count in range(len(self.dJt_dWb)):
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
@@ -171,11 +202,55 @@ class Actor:
         :return: e0 --> PE deviation
         """
         t = self.time_step+1
+        # e0 = 0.3 * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
+        #                 np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
+        #                 np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)
+
         e0 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
                         np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
                         np.cos(2.4 * t) * np.sin(2.4 * t) ** 3) / 10
         return e0
 
+    def update_actor_attributes(self):
+        """
+        The attributes that change with every time step are updated
+        :return:
+        """
+        self.time_step += 1
+        self.dJt_dWb_1 = self.dJt_dWb
+
+    def evaluate_actor(self, *args):
+        """
+        Evaluation of the actor NN given an input or attributes stored in the object
+        :param args: the real and reference states could be provided as input for the evaluation, or not if already stored
+        :return: ut --> input to the system and the incremental model
+        """
+        if len(args) == 0:
+            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+            ut = self.model(nn_input)
+        elif len(args) == 2:
+            xt = args[0]
+            xt_ref = args[1]
+            nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
+            ut = self.model(nn_input)
+        return ut
+
+    def restart_actor(self):
+        """
+        Restart the actor attributes
+        :return:
+        """
+        self.time_step = 0
+        self.xt = None
+        self.xt_ref = None
+        self.ut = 0
+
+        # Attributes related to the training of the NN
+        self.dJt_dWb = None
+        self.dJt_dWb_1 = None
+
+        # Attributes related to the Adam optimizer
+        self.Adam_opt = None
 
 
 

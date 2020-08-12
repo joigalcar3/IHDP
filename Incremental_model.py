@@ -38,11 +38,11 @@ class IncrementalModel:
         self.number_time_steps = number_time_steps
         self.number_states = len(selected_states)
         self.number_inputs = len(selected_input)
-        self.L = 2 * (self.number_inputs+self.number_states)
+        self.L = 2 * (self.number_inputs + self.number_states)
         self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
-        self.store_delta_xt_0 = np.random.rand(self.number_states, self.L)/10
+        self.store_delta_xt_0 = np.random.rand(self.number_states, self.L)
         self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))
-        self.store_delta_ut_0 = np.random.rand(self.number_inputs,  self.L)/10
+        self.store_delta_ut_0 = np.random.rand(self.number_inputs,  self.L)
         self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
 
         # Define the system identification matrices
@@ -85,7 +85,7 @@ class IncrementalModel:
         """
         if self.time_step == 0:
             self.xt_1 = self.xt
-            self.ut_1 = self.ut
+            # self.ut_1 = np.zeros(self.ut.shape)
         # Computation and storage of the gradients
         self.delta_xt = self.xt - self.xt_1
         self.delta_ut = self.ut - self.ut_1
@@ -106,16 +106,14 @@ class IncrementalModel:
         Computes the F and G matrices of the system identification
         :param xt: current time step states
         :param ut: current time step input
-        :return:
+        :return: G --> the input distribution matrix
         """
         # Verifying that the inputs meets the platforms constraints
-        if self.time_step != 0:
-            ut_1 = self.store_input[:, self.time_step-1]
-        else:
-            ut_1 = ut
+        if self.time_step == 0:
+            self.ut_1 = np.zeros(ut.shape)
         ut = max(min(max(min(ut,
-                             np.array([ut_1 + self.input_rate_limits * self.discretisation_time])),
-                         np.array([ut_1 - self.input_rate_limits * self.discretisation_time])),
+                             np.reshape(np.array([self.ut_1 + self.input_rate_limits * self.discretisation_time]), [-1, 1])),
+                         np.reshape(np.array([self.ut_1 - self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                      np.array([[self.input_magnitude_limits]])),
                  - np.array([[self.input_magnitude_limits]]))
         # Store the input variables
@@ -133,19 +131,41 @@ class IncrementalModel:
 
         return self.G
 
-    def evaluate_incremental_model(self):
+    def evaluate_incremental_model(self, *args):
         """
         Estimates the next time step states
         :return: xt1_est --> next time step state estimation
         """
-        # Estimate the next time step states
-        self.xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, self.delta_ut)
+        if len(args) == 0:
+            # Estimate the next time step states
+            self.xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, self.delta_ut)
+            return self.xt1_est
+        elif len(args) == 1:
+            # Estimate the next time step states
+            delta_ut = args[0] - self.ut_1
+            xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, delta_ut)
+            return xt1_est
 
+    def update_incremental_model_attributes(self):
+        """
+        The attributes that change with every time step are updated
+        :return:
+        """
         # Update the object state and input variables
         self.xt_1 = self.xt
         self.ut_1 = self.ut
         self.time_step += 1
-        return self.xt1_est
+
+
+    def restart_incremental_model(self):
+        """
+        Restarts the incremental model.
+        :return:
+        """
+        self.time_step = 0
+        self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
+        self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))
+        self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
 
 
 
