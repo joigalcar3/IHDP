@@ -54,8 +54,8 @@ class Actor:
 
 
         # Attributes related to the training of the NN
-        self.dJt_dWb = None
-        self.dJt_dWb_1 = None
+        self.dut_dWb = None
+        self.dut_dWb_1 = None
 
         # Attributes related to the Adam optimizer
         self.Adam_opt = None
@@ -92,7 +92,7 @@ class Actor:
         with tf.GradientTape() as tape:
             tape.watch(self.model.trainable_variables)
             ut = self.model(nn_input)
-        self.dJt_dWb = tape.gradient(ut, self.model.trainable_variables)
+        self.dut_dWb = tape.gradient(ut, self.model.trainable_variables)
         # ut = self.model(nn_input)
 
         e0 = self.compute_persistent_excitation()
@@ -100,22 +100,23 @@ class Actor:
 
         return self.ut.numpy()
 
-    def train_actor_online(self, Jt, critic_derivative, G):
+    def train_actor_online(self, Jt1, dJt1_dxt1, G):
         """
         Obtains the elements of the chain rule, computes the gradient and applies it to the corresponding weights and
         biases.
-        :param Jt: dEa/dJ
-        :param critic_derivative: dJ/dx
+        :param Jt1: dEa/dJ
+        :param dJt1_dxt1: dJ/dx
         :param G: dx/du, obtained from the incremental model
         :return:
         """
-        Jt = Jt.flatten()[0]
-        critic_derivative = np.reshape(critic_derivative, [self.number_states, 1])
-        chain_rule = Jt * np.matmul(G.T, critic_derivative)
+        Jt1 = Jt1.flatten()[0]
+        dJt1_dxt1 = np.reshape(dJt1_dxt1, [self.number_states, 1])
+        chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
-        for count in range(len(self.dJt_dWb)):
-            update = chain_rule * self.dJt_dWb[count]
-            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
+        for count in range(len(self.dut_dWb)):
+            update = chain_rule * self.dut_dWb[count]
+            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
+                                                                        self.model.trainable_variables[count].shape))
 
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
             WB_variable = self.model.trainable_variables[count].numpy()
@@ -134,6 +135,8 @@ class Actor:
         :param critic: the critic
         :return:
         """
+        Ec_actor_before = 0.5 * np.square(Jt1)
+        print("ACTOR LOSS xt1 before= ", Ec_actor_before)
         weight_cache = [tf.Variable(self.model.trainable_variables[i].numpy()) for i in
                         range(len(self.model.trainable_variables))]
         network_improvement = False
@@ -146,11 +149,11 @@ class Actor:
             ut_after = self.evaluate_actor()
             xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
             Jt1_after, _ = critic.evaluate_critic(xt1_est_after[indices_tracking_states, :])
-            Ec_actor_before = 0.5 * np.square(Jt1_after)
-            print("ACTOR LOSS = ", Ec_actor_before)
+            Ec_actor_after = 0.5 * np.square(Jt1_after)
+            print("ACTOR LOSS xt1 after= ", Ec_actor_after)
 
             # Code for checking whether the learning rate of the actor should be halved
-            if np.square(Jt1_after) <= (np.square(Jt1)) or n_reductions > 10:
+            if np.square(Jt1_after) <= np.square(Jt1) or n_reductions > 10:
                 network_improvement = True
                 if np.sign(Jt1) == np.sign(Jt1_after):
                     self.learning_rate = 2 * self.learning_rate
@@ -178,7 +181,7 @@ class Actor:
         critic_derivative = np.reshape(critic_derivative, [self.number_states, 1])
         chain_rule = Jt * np.matmul(G.T, critic_derivative)
         chain_rule = chain_rule.flatten()[0]
-        update = [tf.Variable(chain_rule * self.dJt_dWb[i]) for i in range(len(self.dJt_dWb))]
+        update = [tf.Variable(chain_rule * self.dut_dWb[i]) for i in range(len(self.dut_dWb))]
         update = [tf.Variable(np.reshape(update[i].numpy(), [-1, ]))
                   if len(self.model.trainable_variables[i].shape) == 1
                   else np.reshape(update[i].numpy(), [-1, self.model.trainable_variables[i].shape[1]])
@@ -187,14 +190,14 @@ class Actor:
         # Apply the Adam optimizer
         self.Adam_opt.apply_gradients(zip(update, [self.model.trainable_variables[i].numpy() for i in range(len(self.model.trainable_variables))]))
 
-        for count in range(len(self.dJt_dWb)):
+        for count in range(len(self.dut_dWb)):
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
             WB_variable = self.model.trainable_variables[count].numpy()
             WB_variable[WB_variable > self.WB_limits] = self.WB_limits
             WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
             self.model.trainable_variables[count].assign(WB_variable)
 
-        self.dJt_dWb_1 = self.dJt_dWb
+        self.dut_dWb_1 = self.dut_dWb
 
     def compute_persistent_excitation(self):
         """
@@ -217,7 +220,7 @@ class Actor:
         :return:
         """
         self.time_step += 1
-        self.dJt_dWb_1 = self.dJt_dWb
+        self.dut_dWb_1 = self.dut_dWb
 
     def evaluate_actor(self, *args):
         """
@@ -246,8 +249,8 @@ class Actor:
         self.ut = 0
 
         # Attributes related to the training of the NN
-        self.dJt_dWb = None
-        self.dJt_dWb_1 = None
+        self.dut_dWb = None
+        self.dut_dWb_1 = None
 
         # Attributes related to the Adam optimizer
         self.Adam_opt = None

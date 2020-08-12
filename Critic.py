@@ -168,10 +168,11 @@ class Critic:
 
         EC_critic_before = 0.5 * np.square(ec_critic_before)
         Ec_actor_before = 0.5 * np.square(self.Jt)
-        print("CRITIC LOSS = ", EC_critic_before)
-        print("ACTOR LOSS = ", Ec_actor_before)
+        print("CRITIC LOSS xt before= ", EC_critic_before)
+        print("ACTOR LOSS xt = ", Ec_actor_before)
 
         network_improvement = False
+        n_reductions = 0
         while not network_improvement:
             for count in range(len(dJt_dW)):
                 update = dE_dJ * dJt_dW[count]
@@ -185,14 +186,16 @@ class Critic:
             updated_Jt = self.model(nn_input)
             ec_critic_after = np.reshape(self.ct_1 + self.gamma * updated_Jt.numpy(), [-1, 1]) - self.Jt_1
             Ec_critic_after = 0.5 * np.square(ec_critic_after)
+            print("CRITIC LOSS xt after= ", Ec_critic_after)
 
             # In the case that the error is not decreased, the time step is repeated with half the learning rate
-            if Ec_critic_after <= EC_critic_before:
+            if Ec_critic_after <= EC_critic_before or n_reductions > 10:
                 network_improvement = True
                 # The learning rate is doubled if the network errors have the same signs
                 if np.sign(ec_critic_before) == np.sign(ec_critic_after):
                     self.learning_rate = 2 * self.learning_rate
             else:
+                n_reductions += 1
                 self.learning_rate = self.learning_rate/2
                 for WB_count in range(len(self.model.trainable_variables)):
                     self.model.trainable_variables[WB_count].assign(weight_cache[WB_count].numpy())

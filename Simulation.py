@@ -67,7 +67,7 @@ class Simulation:
         self.xt = self.initial_states
         self.xt_track = np.reshape(self.xt[self.indices_tracking_states, self.time_step], [-1, 1])
         self.xt_ref = np.reshape(self.reference_signals[:, self.time_step], [-1, 1])
-        
+
         # Prepare system
         self.system.import_linear_system()
         self.system.simplify_system()
@@ -136,8 +136,6 @@ class Simulation:
             self.incremental_model.update_incremental_model_attributes()
             self.critic.update_critic_attributes()
             self.actor.update_actor_attributes()
-
-
 
             self.time_step += 1
             self.xt = xt1
