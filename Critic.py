@@ -9,7 +9,7 @@ data points equals the batch size. This means that if the batch size is 10, then
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.keras.layers import Dense, Flatten
+from tensorflow.keras.layers import Dense, Flatten, Dropout
 from datetime import datetime
 import keras
 import tensorboard
@@ -29,21 +29,26 @@ __status__ = "Production"
 
 class Critic:
 
-    def __init__(self, Q_weights, selected_states, number_time_steps, gamma=0.9, learning_rate=20, layers=(6, 1),
-                 activations=("tanh", "linear"), batch_size=1, epochs=1, activate_tensorboard=False, WB_limits= 30):
+    def __init__(self, Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
+                 gamma=0.8, learning_rate=20, learning_rate_exponent_limit=10, layers=(6, 1),
+                 activations=("relu", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
+                 input_include_reference=False, WB_limits=30):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
+        self.number_tracking_states = len(tracking_states)
+        self.indices_tracking_states = indices_tracking_states
         self.xt = None
         self.xt_1 = np.zeros((self.number_states, 1))
         self.xt_ref = None
+        self.xt_ref_1 = np.zeros((self.number_tracking_states, 1))
         self.ct = 0
         self.ct_1 = 0
         self.Jt = 0
-        self.Jt_1 = 0
+        self.Jt_1 = 10
 
-        if len(Q_weights)<self.number_states:
+        if len(Q_weights)<self.number_tracking_states:
             raise Exception("The size of Q_weights needs to equal the number of states")
-        self.Q = np.zeros((self.number_states, self.number_states))
+        self.Q = np.zeros((self.number_tracking_states, self.number_tracking_states))
         np.fill_diagonal(self.Q, Q_weights)
         self.number_time_steps = number_time_steps
         self.time_step = 0
@@ -64,6 +69,7 @@ class Critic:
         self.dJt_dxt = None
         self.tensorboard_callback = None
         self.activate_tensorboard = activate_tensorboard
+        self.input_include_reference = input_include_reference
 
         # Declaration of attributes related to the cost function
         if not(0 <= gamma <= 1):
@@ -71,6 +77,7 @@ class Critic:
         self.gamma = gamma
         self.learning_rate = learning_rate
         self.learning_rate_0 = learning_rate
+        self.learning_rate_exponent_limit = learning_rate_exponent_limit
         self.WB_limits = WB_limits
         self.store_J = np.zeros((1, self.number_time_steps))
         self.store_c = np.zeros((1, self.number_time_steps))
@@ -86,10 +93,16 @@ class Critic:
         :return:
         """
         initializer = tf.keras.initializers.GlorotNormal()
+        # initializer = tf.keras.initializers.VarianceScaling(
+        #     scale=0.04, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
-        self.model.add(Flatten(input_shape=(self.number_states, 1), name='Flatten_1'))
+        if self.input_include_reference:
+            self.model.add(Flatten(input_shape=(self.number_states + self.number_tracking_states, 1), name='Flatten_1'))
+        else:
+            self.model.add(Flatten(input_shape=(self.number_states, 1), name='Flatten_1'))
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
                              name='dense_0'))
+        # self.model.add(Dropout(0.1, name='Dropout_0'))
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+1)))
@@ -154,12 +167,24 @@ class Critic:
         weight_cache = [tf.Variable(self.model.trainable_variables[i].numpy())
                         for i in range(len(self.model.trainable_variables))]
 
-        nn_input = tf.constant(np.array([self.xt]).astype('float32'))
+        if self.input_include_reference:
+            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+        else:
+            nn_input = tf.constant(np.array([(self.xt)]).astype('float32'))
+        # nn_input_1 = tf.constant(np.array([np.vstack((self.xt_1, self.xt_ref_1))]).astype('float32'))     # TEMPORAL
         with tf.GradientTape() as tape:
             tape.watch(self.model.trainable_variables)
             prediction = self.model(nn_input)
+        # Comment: the gradient of the tanh activation function is 1-tanh(Z)**2. As a result, if the values of Z are
+        # very high or very low, tanh(Z) will lead to either -1 or 1, since the output values of the tanh(Z) activation
+        # function are constrained to the range [-1,1]. Consequently, the derivative will be always be zero and the
+        # derivatives will not be propagated beyond this activation function. The weight and bias of Z = W.T*X + b
+        # will not be updated and the NN only relies in low input (X) values to change the weights and biases. The NN
+        # arrives at a stagnated point.
 
         self.Jt = prediction.numpy()
+        self.store_J[:, self.time_step] = np.reshape(self.Jt, [-1])
+        # self.Jt_1 = self.model(nn_input_1).numpy()     # TEMPORAL
         dJt_dW = tape.gradient(prediction, self.model.trainable_variables)
 
         target = self.targets_computation_online()
@@ -193,10 +218,12 @@ class Critic:
                 network_improvement = True
                 # The learning rate is doubled if the network errors have the same signs
                 if np.sign(ec_critic_before) == np.sign(ec_critic_after):
-                    self.learning_rate = 2 * self.learning_rate
+                    self.learning_rate = min(2 * self.learning_rate,
+                                             self.learning_rate_0 * 2**self.learning_rate_exponent_limit)
             else:
                 n_reductions += 1
-                self.learning_rate = self.learning_rate/2
+                self.learning_rate = max(self.learning_rate / 2,
+                                         self.learning_rate_0/2**self.learning_rate_exponent_limit)
                 for WB_count in range(len(self.model.trainable_variables)):
                     self.model.trainable_variables[WB_count].assign(weight_cache[WB_count].numpy())
 
@@ -215,7 +242,7 @@ class Critic:
         self.xt_ref = xt_ref
         self.ct = self.c_computation()
 
-        nn_input = tf.constant(np.array([self.xt]).astype('float32'))
+        nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
         with tf.GradientTape() as tape:
             tape.watch(self.model.trainable_variables)
             prediction = self.model(nn_input)
@@ -233,7 +260,8 @@ class Critic:
         print("ACTOR LOSS = ", Ec_actor_before)
         for count in range(len(dJt_dW)):
             update = dE_dJ * dJt_dW[count]
-            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
+            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
+                                                                        self.model.trainable_variables[count].shape))
 
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
             WB_variable = self.model.trainable_variables[count].numpy()
@@ -243,20 +271,27 @@ class Critic:
 
         return self.Jt
 
-    def evaluate_critic(self, xt):
+    def evaluate_critic(self, xt, xt_ref):
         """
         Function that evaluates once the critic neural network and returns the value of J(xt).
         :param xt: current time step states
         :return: Jt --> evaluation of the critic at the current time step
                 dJt_dxt --> gradient of the cost function with respect to the input (xt)
         """
-        nn_input = tf.constant(np.array([xt]).astype('float32'))
+        if self.input_include_reference:
+            nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
+        else:
+            nn_input = tf.constant(np.array([(xt)]).astype('float32'))
         with tf.GradientTape() as tape:
             tape.watch(nn_input)
             prediction = self.model(nn_input)
 
         Jt = prediction.numpy()
         dJt_dxt = tape.gradient(prediction, nn_input).numpy()
+        if self.input_include_reference:
+            dJt_dxt = np.reshape(dJt_dxt, [-1, 1])
+            dJt_dxt = np.reshape(dJt_dxt[:self.number_states, :], [-1, 1])
+
         return Jt, dJt_dxt
 
 
@@ -296,7 +331,8 @@ class Critic:
         Computation of the one-step cost function with the received real and reference states.
         :return: ct --> current time step one-step cost function
         """
-        ct = np.matmul(np.matmul((self.xt - self.xt_ref).T, self.Q), (self.xt - self.xt_ref))
+        ct = np.matmul(np.matmul((np.reshape(self.xt[self.indices_tracking_states, :], [-1, 1]) - self.xt_ref).T,
+                                 self.Q), (np.reshape(self.xt[self.indices_tracking_states, :], [-1, 1]) - self.xt_ref))
         self.store_c[0, self.time_step] = ct[0]
         return ct
 
@@ -327,6 +363,7 @@ class Critic:
         self.ct_1 = self.ct
         self.xt_1 = self.xt
         self.Jt_1 = self.Jt
+        self.xt_ref_1 = self.xt_ref
 
     def restart_critic(self):
         """
@@ -338,6 +375,7 @@ class Critic:
         self.xt = None
         self.xt_1 = np.zeros((self.number_states, 1))
         self.xt_ref = None
+        self.xt_ref_1 = np.zeros((self.number_tracking_states, 1))
         self.ct = 0
         self.ct_1 = 0
         self.Jt = 0

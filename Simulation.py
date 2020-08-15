@@ -16,6 +16,9 @@ from Incremental_model import IncrementalModel
 import matplotlib.pyplot as plt
 import numpy as np
 import random
+import matplotlib as mpl
+mpl.use('TkAgg')  # or can use 'TkAgg', whatever you have/prefer
+
 
 "----------------------------------------------------------------------------------------------------------------------"
 __author__ = "Jose Ignacio de Alvear Cardenas"
@@ -56,8 +59,9 @@ class Simulation:
         self.Q_weights = Q_weights
 
         # Initialise all the elements of the simulation
-        self.actor = Actor(self.selected_inputs, self.tracking_states, self.number_time_steps)
-        self.critic = Critic(self.Q_weights, self.tracking_states, self.number_time_steps)
+        self.actor = Actor(self.selected_inputs, self.selected_states, self.tracking_states, self.number_time_steps)
+        self.critic = Critic(self.Q_weights, self.selected_states, self.tracking_states, self.indices_tracking_states,
+                             self.number_time_steps)
         self.system = F16System(self.folder, self.selected_states, self.selected_outputs, self.selected_inputs,
                                 discretisation_time=discretisation_time)
         self.incremental_model = IncrementalModel(self.selected_states, self.selected_inputs, self.number_time_steps,
@@ -69,8 +73,6 @@ class Simulation:
         self.xt_ref = np.reshape(self.reference_signals[:, self.time_step], [-1, 1])
 
         # Prepare system
-        self.system.import_linear_system()
-        self.system.simplify_system()
         self.system.initialise_system(self.xt, self.number_time_steps)
 
         # Initialise the NN
@@ -110,7 +112,7 @@ class Simulation:
             self.xt_ref = np.reshape(self.reference_signals[:, self.time_step], [-1, 1])
 
             # Obtain the input from the actor
-            ut = self.actor.run_actor_online(self.xt_track, self.xt_ref)
+            ut = self.actor.run_actor_online(self.xt, self.xt_ref)
 
             # Run the system
             xt1 = self.system.run_step(ut)
@@ -122,14 +124,16 @@ class Simulation:
             xt1_est = self.incremental_model.evaluate_incremental_model()
 
             # Run and train the critic model
-            _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt_track, self.xt_ref)
+            _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
 
             # Evaluate the critic
-            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est[self.indices_tracking_states, :], [-1, 1]))
+            xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
+            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
 
             # Train the actor
-            self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G, self.indices_tracking_states,
-                                                         self.incremental_model, self.critic)
+            # if self.time_step > 20:
+            self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G,
+                                                         self.incremental_model, self.critic, xt_ref1)
 
             # Update models attributes
             self.system.update_system_attributes()
@@ -141,35 +145,40 @@ class Simulation:
             self.xt = xt1
             self.xt_track = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
 
-        self.plot_state_results()
-        self.plot_input_results()
+            max_x_frame = 0
+            self.plot_state_results(max_x_frame)
+            self.plot_input_results(max_x_frame)
+            self.plot_training_critic(max_x_frame)
 
-    def plot_state_results(self):
+    def plot_state_results(self, max_x_frame):
         """
         Plots the desired real and reference states to be tracked to assess the performance of the complete controller.
         :return:
         """
-        plt.figure(self.iteration)
+        fig = plt.figure(self.iteration)
+        plt.clf()
         n_rows = min(len(self.tracking_states), 3)
         if len(self.tracking_states) > 3:
             n_cols = 2
         else:
             n_cols = 1
 
-        for i in range(len(self.tracking_states)):
+        for i in range(len(self.indices_tracking_states)):
             plt.subplot(n_rows, n_cols, i+1)
-            plt.plot(self.time, self.reference_signals[i, :], 'r', label='Reference state')
-            plt.plot(self.time, self.system.store_states[i, :len(self.time)], 'b', label='Real state')
+            plt.plot(self.time[:self.time_step + max_x_frame], self.reference_signals[i, :min(len(self.time), self.time_step + max_x_frame)], 'r', label='Reference state')
+            plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_states[self.indices_tracking_states[i], :min(len(self.time), self.time_step + max_x_frame)], 'b', label='Real state')
             plt.legend()
             plt.grid(True)
+            # plt.pause(0.001)
             plt.show()
 
-    def plot_input_results(self):
+    def plot_input_results(self, max_x_frame):
         """
         Plots the input to the system to verify that the limits of the platform are not exceeded.
         :return:
         """
         plt.figure(self.iterations + self.iteration)
+        plt.clf()
         n_rows = min(len(self.selected_inputs), 3)
         if len(self.selected_inputs) > 3:
             n_cols = 2
@@ -178,11 +187,44 @@ class Simulation:
 
         for i in range(len(self.selected_inputs)):
             plt.subplot(n_rows, n_cols, i+1)
-            plt.plot(self.time, self.system.store_input[i, :len(self.time)], 'g', label='Input system')
-            plt.plot(self.time, self.system.store_input[i, :len(self.time)], 'y', label='Input incremental model')
+            plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_input[i, :min(len(self.time), self.time_step + max_x_frame)], 'g', label='Input system')
+            plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_input[i, :min(len(self.time), self.time_step + max_x_frame)], 'y', label='Input incremental model')
             plt.legend()
             plt.grid(True)
+            # plt.pause(0.001)
             plt.show()
+
+    def plot_training_critic(self, max_x_frame):
+        """
+        Plots the evolution of the target vs Jt_1, the evolution of c and the evolution of the loss function Ec
+        :return:
+        """
+        c = np.hstack((np.zeros((1, 1)), self.critic.store_c[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)]
+        targets = c + self.critic.gamma * self.critic.store_J[:, :min(len(self.time), self.time_step + max_x_frame)]
+        targets = targets.T
+        c = c.T
+        Jt_1 = np.hstack((np.zeros((1, 1)), self.critic.store_J[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)].T
+        time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
+
+        plt.figure(2 * self.iterations + self.iteration)
+        plt.clf()
+        plt.subplot(3, 1, 1)
+        plt.plot(time, targets, 'b', label='Targets')
+        plt.plot(time, Jt_1, 'r', label='Jt_1')
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(3, 1, 2)
+        plt.plot(time, c, 'b', label='c')
+        plt.legend()
+        plt.grid(True)
+
+        plt.subplot(3, 1, 3)
+        plt.plot(time, 0.5 * np.square(targets - Jt_1), 'b', label='Ec')
+        plt.legend()
+        plt.grid(True)
+        plt.pause(0.0001)
+        plt.show()
 
     def restart_iteration(self):
         """
@@ -190,9 +232,7 @@ class Simulation:
         :return:
         """
         # Prepare system
-        self.system.import_linear_system()
-        self.system.simplify_system()
-        self.system.initialise_system(self.xt, self.number_time_steps)
+        self.system.initialise_system(self.initial_states, self.number_time_steps)
 
         # Restart incremental system
         self.incremental_model.restart_incremental_model()
@@ -213,7 +253,7 @@ if __name__ == "__main__":
     number_time_steps = 500
     Q_weights = [1]
     folder = "Linear_system"
-    initial_states = np.array([[0], [np.deg2rad(5)], [0], [0]])
+    initial_states = np.array([[0], [np.deg2rad(-1)], [0], [0]])
     discretisation_time = 0.1
     time = np.arange(0, number_time_steps * discretisation_time, discretisation_time)
     reference_signals = np.reshape(np.deg2rad(5 * np.sin(0.04*time)), [1, -1])
