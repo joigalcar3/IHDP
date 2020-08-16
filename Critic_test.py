@@ -9,8 +9,13 @@ class TestCritic(unittest.TestCase):
     def setUp(self):
         Q_weights = [1, 1, 1, 1]
         selected_states = ['velocity', 'alpha', 'theta', 'q']
+        tracking_states = ['velocity', 'alpha', 'theta', 'q']
+        indices_tracking_states = [0, 1, 2, 3]
         number_time_steps = 500
-        self.critic = Critic(Q_weights, selected_states, number_time_steps)
+        start_training = -1
+
+        self.critic = Critic(Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
+                             start_training)
 
     def test_c_computation(self):
         self.critic.xt = np.array([[1, 2, 3, 4]]).T
@@ -21,20 +26,34 @@ class TestCritic(unittest.TestCase):
         self.assertEqual(ct.shape, (1, 1))
         self.assertEqual(ct, result)
 
-    def test_targets_computation_end(self):
-        self.critic.store_c = np.reshape(np.array(range(0, 5)), [1, 5])
-        self.critic.store_J = np.reshape(np.array(range(0, 5)), [1, 5])
-        self.critic.gamma = 1
-        targets = self.critic.targets_computation_end()
 
-        result = np.reshape(np.array([[1, 3, 5, 7]]), [4, 1])
-        self.assertEqual(targets.shape, (4, 1))
-        self.assertEqual(targets[0, 0], result[0, 0])
-        self.assertEqual(targets[1, 0], result[1, 0])
-        self.assertEqual(targets[2, 0], result[2, 0])
-        self.assertEqual(targets[3, 0], result[3, 0])
+    # def test_targets_computation_end(self):
+    #     self.critic.store_c = np.reshape(np.array(range(0, 5)), [1, 5])
+    #     self.critic.store_J = np.reshape(np.array(range(0, 5)), [1, 5])
+    #     self.critic.gamma = 1
+    #     targets = self.critic.targets_computation_end()
+    #
+    #     result = np.reshape(np.array([[1, 3, 5, 7]]), [4, 1])
+    #     self.assertEqual(targets.shape, (4, 1))
+    #     self.assertEqual(targets[0, 0], result[0, 0])
+    #     self.assertEqual(targets[1, 0], result[1, 0])
+    #     self.assertEqual(targets[2, 0], result[2, 0])
+    #     self.assertEqual(targets[3, 0], result[3, 0])
+
+    def test_targets_computation_online(self):
+        self.critic.ct_1 = 5
+        self.critic.Jt = -3
+        self.critic.gamma = 1
+
+        targets = self.critic.targets_computation_online()
+
+        self.assertEqual(targets[0, 0], -2)
+
 
     def test_build_critic_model(self):
+        self.critic.layers = [20, 10, 1]
+        self.critic.activations = ['relu', 'relu', 'linear']
+        self.input_include_reference = False
         self.critic.build_critic_model()
         trainable_variables = self.critic.model.trainable_variables
         total = 0
@@ -44,27 +63,52 @@ class TestCritic(unittest.TestCase):
             else:
                 total += matrix.shape[0]*matrix.shape[1]
 
-        self.assertEqual(total, 61)
+        self.assertEqual(total, 321)
 
-    def test_run_critic(self):
+    # def test_run_critic(self):
+    #     time_steps = 500
+    #     dt = 0.5
+    #     time = np.arange(0, time_steps * dt, dt)
+    #
+    #     store_xt = np.array([5 * np.sin(0.04*time), 6 * np.sin(0.04*time), 7 * np.sin(0.04*time), 8 * np.sin(0.04*time)])
+    #     store_xt_ref = np.array([1 * np.sin(0.2*time), 2 * np.sin(0.2*time), 3 * np.sin(0.2*time), 4 * np.sin(0.2*time)])
+    #
+    #     self.critic.build_critic_model()
+    #
+    #     W1 = self.critic.model.trainable_variables[0].numpy()
+    #     W2 = self.critic.model.trainable_variables[2].numpy()
+    #     for count in range(store_xt.shape[1]):
+    #         hidden = np.matmul(np.reshape(store_xt[:, count], [4, 1]).T, W1)
+    #         hidden[hidden < 0] = 0
+    #         output = np.matmul(hidden, W2)
+    #         Jt = self.critic.run_critic(np.reshape(store_xt[:, count], [4, 1]), np.reshape(store_xt_ref[:, count], [4, 1]))
+    #         if count % 20 == 0:
+    #             self.assertAlmostEqual(Jt[0, 0], output[0, 0], 5)
+
+    def test_run_train_critic_online_adam(self):
         time_steps = 500
         dt = 0.5
         time = np.arange(0, time_steps * dt, dt)
+        self.critic.layers = [10, 1]
+        self.critic.activations = ['relu', 'linear']
+        self.input_include_reference = False
 
         store_xt = np.array([5 * np.sin(0.04*time), 6 * np.sin(0.04*time), 7 * np.sin(0.04*time), 8 * np.sin(0.04*time)])
         store_xt_ref = np.array([1 * np.sin(0.2*time), 2 * np.sin(0.2*time), 3 * np.sin(0.2*time), 4 * np.sin(0.2*time)])
 
         self.critic.build_critic_model()
 
-        W1 = self.critic.model.trainable_variables[0].numpy()
-        W2 = self.critic.model.trainable_variables[2].numpy()
         for count in range(store_xt.shape[1]):
-            hidden = np.matmul(np.reshape(store_xt[:, count], [4, 1]).T, W1)
+            W1 = self.critic.model.trainable_variables[0].numpy()
+            b1 = self.critic.model.trainable_variables[1].numpy()
+            W2 = self.critic.model.trainable_variables[2].numpy()
+            b2 = self.critic.model.trainable_variables[3].numpy()
+            hidden = np.matmul(np.reshape(store_xt[:, count], [4, 1]).T, W1) + np.reshape(b1, [1, -1])
             hidden[hidden < 0] = 0
-            output = np.matmul(hidden, W2)
-            Jt = self.critic.run_critic(np.reshape(store_xt[:, count], [4, 1]), np.reshape(store_xt_ref[:, count], [4, 1]))
+            output = np.matmul(hidden, W2) + np.reshape(b2, [1, -1])
+            Jt = self.critic.run_train_critic_online_adam(np.reshape(store_xt[:, count], [4, 1]), np.reshape(store_xt_ref[:, count], [4, 1]))
             if count % 20 == 0:
-                self.assertAlmostEqual(Jt[0, 0], output[0, 0], 5)
+                self.assertAlmostEqual(Jt[0, 0], output[0, 0], 3)
 
     def test_train_critic_end(self):
         Q_weights = [1, 1, 1, 1]

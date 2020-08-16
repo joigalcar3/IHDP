@@ -34,7 +34,8 @@ __status__ = "Production"
 
 class Simulation:
     def __init__(self, iterations, selected_inputs, selected_states, selected_outputs, number_time_steps, Q_weights,
-                 folder, initial_states, reference_signals, discretisation_time=0.5, tracking_states=['alpha']):
+                 folder, initial_states, reference_signals, discretisation_time=0.5, tracking_states=['alpha'],
+                 start_training_actor=-1, start_training_critic=-1):
         # Attributes regarding the simulation
         self.iterations = iterations
         self.number_time_steps = number_time_steps
@@ -42,6 +43,8 @@ class Simulation:
         self.discretisation_time = discretisation_time
         self.time = list(np.arange(0, self.number_time_steps * self.discretisation_time, self.discretisation_time))
         self.iteration = 0
+        self.start_training_actor = start_training_actor
+        self.start_training_critic = start_training_critic
 
         # Attributes regarding the system
         self.folder = folder
@@ -59,9 +62,10 @@ class Simulation:
         self.Q_weights = Q_weights
 
         # Initialise all the elements of the simulation
-        self.actor = Actor(self.selected_inputs, self.selected_states, self.tracking_states, self.number_time_steps)
+        self.actor = Actor(self.selected_inputs, self.selected_states, self.tracking_states,
+                           self.indices_tracking_states, self.number_time_steps, self.start_training_actor)
         self.critic = Critic(self.Q_weights, self.selected_states, self.tracking_states, self.indices_tracking_states,
-                             self.number_time_steps)
+                             self.number_time_steps, self.start_training_critic)
         self.system = F16System(self.folder, self.selected_states, self.selected_outputs, self.selected_inputs,
                                 discretisation_time=discretisation_time)
         self.incremental_model = IncrementalModel(self.selected_states, self.selected_inputs, self.number_time_steps,
@@ -98,6 +102,7 @@ class Simulation:
             self.xt_track = np.reshape(self.xt[self.indices_tracking_states, self.time_step], [-1, 1])
 
             self.iteration += 1
+            plt.close('all')
 
     def run_iteration(self):
         """
@@ -105,7 +110,7 @@ class Simulation:
         correct order.
         :return:
         """
-        while self.time_step < self.number_time_steps:
+        while self.time_step < self.number_time_steps and self.critic.ct < (np.deg2rad(5)**2*self.Q_weights[0]):
             print(self.time_step)
 
             # Retrieve the reference signal
@@ -124,15 +129,21 @@ class Simulation:
             xt1_est = self.incremental_model.evaluate_incremental_model()
 
             # Run and train the critic model
-            _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
+            # _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
+            # _ = self.critic.run_train_critic_online_momentum(self.xt, self.xt_ref)
+            _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref)
 
             # Evaluate the critic
             xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
             Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
+            # Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1, [-1, 1]), xt_ref1)
 
             # Train the actor
-            # if self.time_step > 20:
-            self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G,
+            # self.actor.train_actor_online_xadaptive_alpha(Jt1, dJt1_dxt1, G,
+            #                                    self.incremental_model, self.critic, xt_ref1)
+            # self.actor.train_actor_online_momentum(Jt1, dJt1_dxt1, G,
+            #                                    self.incremental_model, self.critic, xt_ref1)
+            self.actor.train_actor_online_adam(Jt1, dJt1_dxt1, G,
                                                          self.incremental_model, self.critic, xt_ref1)
 
             # Update models attributes
@@ -169,6 +180,8 @@ class Simulation:
             plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_states[self.indices_tracking_states[i], :min(len(self.time), self.time_step + max_x_frame)], 'b', label='Real state')
             plt.legend()
             plt.grid(True)
+            # thismanager = mpl.pyplot.get_current_fig_manager()
+            # thismanager.window.wm_geometry("+1900-600")
             # plt.pause(0.001)
             plt.show()
 
@@ -191,6 +204,8 @@ class Simulation:
             plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_input[i, :min(len(self.time), self.time_step + max_x_frame)], 'y', label='Input incremental model')
             plt.legend()
             plt.grid(True)
+            # thismanager = mpl.pyplot.get_current_fig_manager()
+            # thismanager.window.wm_geometry("+2500-600")
             # plt.pause(0.001)
             plt.show()
 
@@ -201,7 +216,7 @@ class Simulation:
         """
         c = np.hstack((np.zeros((1, 1)), self.critic.store_c[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)]
         targets = c + self.critic.gamma * self.critic.store_J[:, :min(len(self.time), self.time_step + max_x_frame)]
-        targets = targets.T
+        targets = -targets.T
         c = c.T
         Jt_1 = np.hstack((np.zeros((1, 1)), self.critic.store_J[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)].T
         time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
@@ -209,7 +224,7 @@ class Simulation:
         plt.figure(2 * self.iterations + self.iteration)
         plt.clf()
         plt.subplot(3, 1, 1)
-        plt.plot(time, targets, 'b', label='Targets')
+        plt.plot(time, -targets, 'b', label='Targets')
         plt.plot(time, Jt_1, 'r', label='Jt_1')
         plt.legend()
         plt.grid(True)
@@ -220,9 +235,11 @@ class Simulation:
         plt.grid(True)
 
         plt.subplot(3, 1, 3)
-        plt.plot(time, 0.5 * np.square(targets - Jt_1), 'b', label='Ec')
+        plt.plot(time, 0.5 * np.square(targets + Jt_1), 'b', label='Ec')
         plt.legend()
         plt.grid(True)
+        # thismanager = mpl.pyplot.get_current_fig_manager()
+        # thismanager.window.wm_geometry("+2700+200")
         plt.pause(0.0001)
         plt.show()
 
@@ -251,9 +268,9 @@ if __name__ == "__main__":
     selected_states = ['velocity', 'alpha', 'theta', 'q']
     selected_outputs = ['alpha']
     number_time_steps = 500
-    Q_weights = [1]
+    Q_weights = [10]
     folder = "Linear_system"
-    initial_states = np.array([[0], [np.deg2rad(-1)], [0], [0]])
+    initial_states = np.array([[0], [np.deg2rad(0)], [0], [0]])
     discretisation_time = 0.1
     time = np.arange(0, number_time_steps * discretisation_time, discretisation_time)
     reference_signals = np.reshape(np.deg2rad(5 * np.sin(0.04*time)), [1, -1])

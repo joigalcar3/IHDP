@@ -86,11 +86,10 @@ class TestSystem(unittest.TestCase):
         self.sys1.xt = np.array([[2],[2]])
         ut = np.reshape(np.array([10]), [1,1])
 
-        xt1, yt = self.sys1.run_step(ut)
+        xt1 = self.sys1.run_step(ut)
 
         self.assertEqual(xt1[0, 0], 24)
         self.assertEqual(xt1[1, 0], 34)
-        self.assertEqual(yt, 46)
 
 
 if __name__ == '__main__':

@@ -16,10 +16,10 @@ class TestIncrementalModel(unittest.TestCase):
         self.incremental_model.store_delta_ut = np.reshape(np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
                                                            [self.incremental_model.number_inputs,
                                                             self.incremental_model.number_time_steps])
-
+        self.incremental_model.L = 2 * (1 + 4)
         A_LS_matrix = self.incremental_model.build_A_LS_matrix()
 
-        self.assertEqual(A_LS_matrix.shape, (6, 3))
+        self.assertEqual(A_LS_matrix.shape, (10, 3))
         self.assertEqual(A_LS_matrix[0, 0], 9)
         self.assertEqual(A_LS_matrix[1, 1], 3)
         self.assertEqual(A_LS_matrix[2, 2], 7)
@@ -36,10 +36,11 @@ class TestIncrementalModel(unittest.TestCase):
         self.incremental_model.xt_1 = np.array([[0], [0]])
         self.incremental_model.ut = np.array([[10]])
         self.incremental_model.ut_1 = np.array([[0]])
+        self.incremental_model.L = 2 * (1 + 4)
 
         x_LS_vector = self.incremental_model.build_x_LS_vector()
 
-        self.assertEqual(x_LS_vector.shape, (6, 2))
+        self.assertEqual(x_LS_vector.shape, (10, 2))
         self.assertEqual(x_LS_vector[0, 0], 10)
         self.assertEqual(x_LS_vector[1, 1], 2)
         self.assertEqual(x_LS_vector[5, 1], 6)

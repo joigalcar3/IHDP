@@ -38,7 +38,7 @@ class IncrementalModel:
         self.number_time_steps = number_time_steps
         self.number_states = len(selected_states)
         self.number_inputs = len(selected_input)
-        self.L = 2 * (self.number_inputs + self.number_states)
+        self.L = 1 * (self.number_inputs + self.number_states)
         self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
         self.store_delta_xt_0 = np.random.rand(self.number_states, self.L)
         self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))

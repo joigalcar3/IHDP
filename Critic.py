@@ -30,8 +30,8 @@ __status__ = "Production"
 class Critic:
 
     def __init__(self, Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
-                 gamma=0.8, learning_rate=20, learning_rate_exponent_limit=10, layers=(6, 1),
-                 activations=("relu", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
+                 start_training, gamma=1, learning_rate=20, learning_rate_exponent_limit=10, layers=(6, 1),
+                 activations=("tanh", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
                  input_include_reference=False, WB_limits=30):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
@@ -44,7 +44,7 @@ class Critic:
         self.ct = 0
         self.ct_1 = 0
         self.Jt = 0
-        self.Jt_1 = 10
+        self.Jt_1 = 1
 
         if len(Q_weights)<self.number_tracking_states:
             raise Exception("The size of Q_weights needs to equal the number of states")
@@ -52,6 +52,7 @@ class Critic:
         np.fill_diagonal(self.Q, Q_weights)
         self.number_time_steps = number_time_steps
         self.time_step = 0
+        self.start_training = start_training
 
         # Store the states
         self.store_states = np.zeros((self.number_time_steps, self.number_states, 1))
@@ -86,6 +87,15 @@ class Critic:
         self.store_inputs = np.zeros((self.batch_size, self.number_states, 1))
         self.store_targets = np.zeros((self.batch_size, 1))
 
+        # Attributes related to the momentum
+        self.momentum_dict = {}
+        self.beta_momentum = 0.9
+
+        # Attributes related to RMSprop
+        self.rmsprop_dict = {}
+        self.beta_rmsprop = 0.999
+        self.epsilon = 1e-8
+
     def build_critic_model(self):
         """
         Function that creates the neural network. At the moment, it is a densely connected neural network. The user
@@ -109,6 +119,10 @@ class Critic:
         self.model.compile(optimizer='adam',
                            loss='mean_squared_error',
                            metrics=['accuracy'])
+
+        for count in range(len(self.model.trainable_variables)):
+            self.momentum_dict[count] = 0
+            self.rmsprop_dict[count] = 0
 
         if self.activate_tensorboard:
             logdir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -159,57 +173,23 @@ class Critic:
         :param xt: current time step states
         :param xt_ref: current time step reference states for the computation of the one-step cost function
         :return: Jt --> evaluation of the critic at the current time step
-                dJt_dxt --> gradient of dJt/dxt necessary for actor weight update
         """
-        self.xt = xt
-        self.xt_ref = xt_ref
-        self.ct = self.c_computation()
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        dE_dJ, ec_critic_before, EC_critic_before= self.compute_loss_derivative()
         weight_cache = [tf.Variable(self.model.trainable_variables[i].numpy())
                         for i in range(len(self.model.trainable_variables))]
 
-        if self.input_include_reference:
-            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
-        else:
-            nn_input = tf.constant(np.array([(self.xt)]).astype('float32'))
-        # nn_input_1 = tf.constant(np.array([np.vstack((self.xt_1, self.xt_ref_1))]).astype('float32'))     # TEMPORAL
-        with tf.GradientTape() as tape:
-            tape.watch(self.model.trainable_variables)
-            prediction = self.model(nn_input)
-        # Comment: the gradient of the tanh activation function is 1-tanh(Z)**2. As a result, if the values of Z are
-        # very high or very low, tanh(Z) will lead to either -1 or 1, since the output values of the tanh(Z) activation
-        # function are constrained to the range [-1,1]. Consequently, the derivative will be always be zero and the
-        # derivatives will not be propagated beyond this activation function. The weight and bias of Z = W.T*X + b
-        # will not be updated and the NN only relies in low input (X) values to change the weights and biases. The NN
-        # arrives at a stagnated point.
-
-        self.Jt = prediction.numpy()
-        self.store_J[:, self.time_step] = np.reshape(self.Jt, [-1])
-        # self.Jt_1 = self.model(nn_input_1).numpy()     # TEMPORAL
-        dJt_dW = tape.gradient(prediction, self.model.trainable_variables)
-
-        target = self.targets_computation_online()
-        ec_critic_before = target - self.Jt_1
-        dE_dJ = self.gamma * ec_critic_before
-
-        EC_critic_before = 0.5 * np.square(ec_critic_before)
-        Ec_actor_before = 0.5 * np.square(self.Jt)
-        print("CRITIC LOSS xt before= ", EC_critic_before)
-        print("ACTOR LOSS xt = ", Ec_actor_before)
-
         network_improvement = False
         n_reductions = 0
-        while not network_improvement:
+        while not network_improvement and self.time_step > self.start_training:
             for count in range(len(dJt_dW)):
                 update = dE_dJ * dJt_dW[count]
                 self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
 
                 # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-                WB_variable = self.model.trainable_variables[count].numpy()
-                WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-                WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-                self.model.trainable_variables[count].assign(WB_variable)
+                self.check_WB_limits(count)
             updated_Jt = self.model(nn_input)
-            ec_critic_after = np.reshape(self.ct_1 + self.gamma * updated_Jt.numpy(), [-1, 1]) - self.Jt_1
+            ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
             Ec_critic_after = 0.5 * np.square(ec_critic_after)
             print("CRITIC LOSS xt after= ", Ec_critic_after)
 
@@ -229,47 +209,173 @@ class Critic:
 
         return self.Jt
 
-    def run_train_critic_online(self, xt, xt_ref):
+    def run_train_critic_online_momentum(self, xt, xt_ref):
         """
         Function that evaluates once the critic neural network and returns the value of J(xt). At the same
         time, it trains the function approximator every number of time steps equal to the chosen batch size.
         :param xt: current time step states
         :param xt_ref: current time step reference states for the computation of the one-step cost function
         :return: Jt --> evaluation of the critic at the current time step
-                dJt_dxt --> gradient of dJt/dxt necessary for actor weight update
+        """
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        dE_dJ, _, _ = self.compute_loss_derivative()
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW)):
+                gradient = dE_dJ * dJt_dW[count]
+                update = self.beta_momentum * self.momentum_dict[count] + (1-self.beta_momentum) * gradient
+                self.momentum_dict[count] = update
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
+
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+        updated_Jt = self.model(nn_input)
+        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        return self.Jt
+
+    def run_train_critic_online_adam(self, xt, xt_ref):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+        time, it trains the function approximator every number of time steps equal to the chosen batch size.
+        :param xt: current time step states
+        :param xt_ref: current time step reference states for the computation of the one-step cost function
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        dE_dJ, _, _ = self.compute_loss_derivative()
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW)):
+                gradient = dE_dJ * dJt_dW[count]
+                momentum = self.beta_momentum * self.momentum_dict[count] + (1-self.beta_momentum) * gradient
+                self.momentum_dict[count] = momentum
+                momentum_corrected = momentum/(1-self.beta_momentum**(self.time_step + 1))
+
+                rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
+                          (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
+                self.rmsprop_dict[count] = rmsprop
+                rmsprop_corrected = rmsprop/(1-self.beta_rmsprop**(self.time_step + 1))
+
+                update = momentum_corrected/(np.sqrt(rmsprop_corrected) + self.epsilon)
+
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
+
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+        updated_Jt = self.model(nn_input)
+        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        return self.Jt
+
+
+    def compute_forward_pass(self, xt, xt_ref):
+        """
+        Compute the output of the critic, as well as the derivative of Jt with respect to the network weights and biases
+        :param xt: states
+        :param xt_ref: reference states
+        :return: nn_input --> formatted input to the neural network
+                dJt_dW --> derivative of the loss function with respect to the weights and biases
         """
         self.xt = xt
         self.xt_ref = xt_ref
         self.ct = self.c_computation()
 
-        nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+        if self.input_include_reference:
+            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+        else:
+            nn_input = tf.constant(np.array([(self.xt)]).astype('float32'))
+        # nn_input_1 = tf.constant(np.array([np.vstack((self.xt_1, self.xt_ref_1))]).astype('float32'))     # TEMPORAL
         with tf.GradientTape() as tape:
             tape.watch(self.model.trainable_variables)
             prediction = self.model(nn_input)
+        # Comment: the gradient of the tanh activation function is 1-tanh(Z)**2. As a result, if the values of Z are
+        # very high or very low, tanh(Z) will lead to either -1 or 1, since the output values of the tanh(Z) activation
+        # function are constrained to the range [-1,1]. Consequently, the derivative will be always be zero and the
+        # derivatives will not be propagated beyond this activation function. The weight and bias of Z = W.T*X + b
+        # will not be updated and the NN only relies in low input (X) values to change the weights and biases. The NN
+        # arrives at a stagnated point.
 
-        self.Jt = prediction.numpy()
         dJt_dW = tape.gradient(prediction, self.model.trainable_variables)
+        self.Jt = prediction.numpy()
+        self.store_J[:, self.time_step] = np.reshape(self.Jt, [-1])
+        # self.Jt_1 = self.model(nn_input_1).numpy()     # TEMPORAL
+        return nn_input, dJt_dW
 
+    def compute_loss_derivative(self):
+        """
+        Computes the derivative of the loss function with respect to Jt
+        :return: dE_dJ --> derivative of the loss function with respect to Jt
+                ec_critic_before --> error of the network before the training
+                EC_critic_before --> loss function of the network before the training
+        """
         target = self.targets_computation_online()
-        ec_critic_before = target - self.Jt_1
-        dE_dJ = self.gamma * ec_critic_before
+        ec_critic_before = target + self.Jt_1
+        dE_dJ = -self.gamma * ec_critic_before
 
         EC_critic_before = 0.5 * np.square(ec_critic_before)
         Ec_actor_before = 0.5 * np.square(self.Jt)
-        print("CRITIC LOSS = ", EC_critic_before)
-        print("ACTOR LOSS = ", Ec_actor_before)
-        for count in range(len(dJt_dW)):
-            update = dE_dJ * dJt_dW[count]
-            self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
-                                                                        self.model.trainable_variables[count].shape))
+        print("CRITIC LOSS xt before= ", EC_critic_before)
+        print("ACTOR LOSS xt = ", Ec_actor_before)
 
-            # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-            WB_variable = self.model.trainable_variables[count].numpy()
-            WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-            WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-            self.model.trainable_variables[count].assign(WB_variable)
+        return dE_dJ, ec_critic_before, EC_critic_before
 
-        return self.Jt
+    def check_WB_limits(self, count):
+        """
+        Check whether any of the weights and biases exceed the limit imposed (WB_limits) and saturate the values
+        :param count: index within the model.trainable_variables being analysed
+        :return:
+        """
+        WB_variable = self.model.trainable_variables[count].numpy()
+        WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+        WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+        self.model.trainable_variables[count].assign(WB_variable)
+
+    # def run_train_critic_online(self, xt, xt_ref):
+    #     """
+    #     Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+    #     time, it trains the function approximator every number of time steps equal to the chosen batch size.
+    #     :param xt: current time step states
+    #     :param xt_ref: current time step reference states for the computation of the one-step cost function
+    #     :return: Jt --> evaluation of the critic at the current time step
+    #             dJt_dxt --> gradient of dJt/dxt necessary for actor weight update
+    #     """
+    #     self.xt = xt
+    #     self.xt_ref = xt_ref
+    #     self.ct = self.c_computation()
+    #
+    #     nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+    #     with tf.GradientTape() as tape:
+    #         tape.watch(self.model.trainable_variables)
+    #         prediction = self.model(nn_input)
+    #
+    #     self.Jt = prediction.numpy()
+    #     dJt_dW = tape.gradient(prediction, self.model.trainable_variables)
+    #
+    #     target = self.targets_computation_online()
+    #     ec_critic_before = target - self.Jt_1
+    #     dE_dJ = self.gamma * ec_critic_before
+    #
+    #     EC_critic_before = 0.5 * np.square(ec_critic_before)
+    #     Ec_actor_before = 0.5 * np.square(self.Jt)
+    #     print("CRITIC LOSS = ", EC_critic_before)
+    #     print("ACTOR LOSS = ", Ec_actor_before)
+    #     for count in range(len(dJt_dW)):
+    #         update = dE_dJ * dJt_dW[count]
+    #         self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
+    #                                                                     self.model.trainable_variables[count].shape))
+    #
+    #         # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+    #         WB_variable = self.model.trainable_variables[count].numpy()
+    #         WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+    #         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+    #         self.model.trainable_variables[count].assign(WB_variable)
+    #
+    #     return self.Jt
 
     def evaluate_critic(self, xt, xt_ref):
         """
@@ -351,7 +457,7 @@ class Critic:
         time step and the current cost function.
         :return: target --> the target of the previous time step.
         """
-        target = np.reshape(self.ct_1 + self.gamma * self.Jt, [-1, 1])
+        target = np.reshape(-self.ct_1 - self.gamma * self.Jt, [-1, 1])
         return target
 
     def update_critic_attributes(self):
@@ -395,6 +501,11 @@ class Critic:
         # Declaration of storage arrays for online training
         self.store_inputs = np.zeros((self.batch_size, self.number_states, 1))
         self.store_targets = np.zeros((self.batch_size, 1))
+
+        # Restart momentum and rmsprop
+        for count in range(len(self.model.trainable_variables)):
+            self.momentum_dict[count] = 0
+            self.rmsprop_dict[count] = 0
 
 
 if __name__ == "__main__":
