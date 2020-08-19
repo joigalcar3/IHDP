@@ -129,22 +129,23 @@ class Simulation:
             xt1_est = self.incremental_model.evaluate_incremental_model()
 
             # Run and train the critic model
-            # _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
+            _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
             # _ = self.critic.run_train_critic_online_momentum(self.xt, self.xt_ref)
-            _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref)
+            # _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref, self.iteration)
 
             # Evaluate the critic
             xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
             Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
+            # self.critic.train_critic_replay_adam(10, self.iteration)
             # Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1, [-1, 1]), xt_ref1)
 
             # Train the actor
-            # self.actor.train_actor_online_xadaptive_alpha(Jt1, dJt1_dxt1, G,
-            #                                    self.incremental_model, self.critic, xt_ref1)
+            self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G,
+                                               self.incremental_model, self.critic, xt_ref1)
             # self.actor.train_actor_online_momentum(Jt1, dJt1_dxt1, G,
             #                                    self.incremental_model, self.critic, xt_ref1)
-            self.actor.train_actor_online_adam(Jt1, dJt1_dxt1, G,
-                                                         self.incremental_model, self.critic, xt_ref1)
+            # self.actor.train_actor_online_adam(Jt1, dJt1_dxt1, G,
+            #                                              self.incremental_model, self.critic, xt_ref1, self.iteration)
 
             # Update models attributes
             self.system.update_system_attributes()
@@ -268,7 +269,7 @@ if __name__ == "__main__":
     selected_states = ['velocity', 'alpha', 'theta', 'q']
     selected_outputs = ['alpha']
     number_time_steps = 500
-    Q_weights = [10]
+    Q_weights = [1]
     folder = "Linear_system"
     initial_states = np.array([[0], [np.deg2rad(0)], [0], [0]])
     discretisation_time = 0.1

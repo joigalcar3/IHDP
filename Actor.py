@@ -237,7 +237,7 @@ class Actor:
         Ec_actor_after = 0.5 * np.square(Jt1_after)
         print("ACTOR LOSS xt1 after= ", Ec_actor_after)
 
-    def train_actor_online_adam(self, Jt1, dJt1_dxt1, G, incremental_model, critic, xt_ref1):
+    def train_actor_online_adam(self, Jt1, dJt1_dxt1, G, incremental_model, critic, xt_ref1, iteration):
         """
         Train the actor with an adaptive alpha depending on the sign and magnitude of the network errors
         :param Jt1: the evaluation of the critic with the next time step prediction of the incremental model
@@ -260,12 +260,14 @@ class Actor:
                 gradient = chain_rule * self.dut_dWb[count]
                 momentum = self.beta_momentum * self.momentum_dict[count] + (1-self.beta_momentum) * gradient
                 self.momentum_dict[count] = momentum
-                momentum_corrected = momentum/(1-self.beta_momentum**(self.time_step + 1))
+                # momentum_corrected = momentum/(1-self.beta_momentum**(self.time_step + 1))
+                momentum_corrected = momentum / (1 - np.power(self.beta_momentum, self.time_step + 1))
 
                 rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
                           (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
                 self.rmsprop_dict[count] = rmsprop
-                rmsprop_corrected = rmsprop/(1 - self.beta_rmsprop**(self.time_step + 1))
+                # rmsprop_corrected = rmsprop/(1 - self.beta_rmsprop**(self.time_step + 1))
+                rmsprop_corrected = rmsprop / (1 - np.power(self.beta_rmsprop, self.time_step + 1))
 
                 update = momentum_corrected/(np.sqrt(rmsprop_corrected) + self.epsilon)
                 self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
