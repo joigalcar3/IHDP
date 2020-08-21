@@ -33,8 +33,10 @@ __status__ = "Production"
 
 class Actor:
     def __init__(self, selected_inputs, selected_states, tracking_states, indices_tracking_states,
-                 number_time_steps, start_training, layers=(6, 1), activations=('tanh', 'linear'), batch_size=1, epochs=1,
-                 learning_rate=10, learning_rate_exponent_limit=10, only_track_xt_input=False, WB_limits=30):
+                 number_time_steps, start_training, layers=(6, 1), activations=('sigmoid', 'sigmoid'), batch_size=1,
+                 epochs=1, learning_rate=2, learning_rate_exponent_limit=10, only_track_xt_input=False,
+                 input_tracking_error=True, type_PE='3211', amplitude_3211=4, pulse_length_3211=10, WB_limits=30,
+                 maximum_input=25):
         self.number_inputs = len(selected_inputs)
         self.number_states = len(selected_states)
         self.number_tracking_states = len(tracking_states)
@@ -42,6 +44,7 @@ class Actor:
         self.xt = None
         self.xt_ref = None
         self.ut = 0
+        self.maximum_input = maximum_input
 
         # Attributes related to time
         self.number_time_steps = number_time_steps
@@ -61,8 +64,13 @@ class Actor:
         self.learning_rate_0 = learning_rate
         self.learning_rate_exponent_limit = learning_rate_exponent_limit
         self.only_track_xt_input = only_track_xt_input
+        self.input_tracking_error = input_tracking_error
         self.WB_limits = WB_limits
 
+        # Attributes related to the persistent excitation
+        self.type_PE = type_PE
+        self.amplitude_3211 = amplitude_3211
+        self.pulse_length_3211 = pulse_length_3211
 
         # Attributes related to the training of the NN
         self.dut_dWb = None
@@ -88,10 +96,14 @@ class Actor:
         """
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=0.04, mode='fan_in', distribution='truncated_normal', seed=None)
+            scale=0.001, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
         if self.only_track_xt_input:
-            self.model.add(Flatten(input_shape=(len(self.indices_tracking_states) + self.number_tracking_states, 1), name='Flatten_1'))
+            self.model.add(Flatten(input_shape=(len(self.indices_tracking_states) + self.number_tracking_states, 1),
+                                   name='Flatten_1'))
+        elif self.input_tracking_error:
+            self.model.add(Flatten(input_shape=(self.number_tracking_states, 1),
+                                  name='Flatten_1'))
         else:
             self.model.add(Flatten(input_shape=(self.number_states + self.number_tracking_states, 1), name='Flatten_1'))
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
@@ -120,7 +132,13 @@ class Actor:
             self.xt = xt
         self.xt_ref = xt_ref
 
-        nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+        if self.input_tracking_error:
+            tracked_states = np.reshape(xt[self.indices_tracking_states, :], [-1, 1])
+            xt_error = np.reshape(tracked_states - xt_ref, [-1, 1])
+            nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
+        else:
+            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
+
         with tf.GradientTape() as tape:
             tape.watch(self.model.trainable_variables)
             ut = self.model(nn_input)
@@ -128,9 +146,11 @@ class Actor:
         # ut = self.model(nn_input)
 
         e0 = self.compute_persistent_excitation()
-        self.ut = ut + e0
+        self.ut = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input + e0,
+                          np.reshape(self.maximum_input, ut.numpy().shape)),
+                      np.reshape(-self.maximum_input, ut.numpy().shape))
 
-        return self.ut.numpy()
+        return self.ut
 
     def train_actor_online(self, Jt1, dJt1_dxt1, G):
         """
@@ -142,7 +162,10 @@ class Actor:
         :return:
         """
         Jt1 = Jt1.flatten()[0]
-        chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
+        if self.input_tracking_error:
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T, dJt1_dxt1)
+        else:
+            chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
         for count in range(len(self.dut_dWb)):
             update = chain_rule * self.dut_dWb[count]
@@ -150,10 +173,7 @@ class Actor:
                                                                         self.model.trainable_variables[count].shape))
 
             # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-            WB_variable = self.model.trainable_variables[count].numpy()
-            WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-            WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-            self.model.trainable_variables[count].assign(WB_variable)
+            self.check_WB_limits(count)
 
     def train_actor_online_adaptive_alpha(self, Jt1, dJt1_dxt1, G, incremental_model, critic, xt_ref1):
         """
@@ -214,7 +234,10 @@ class Actor:
 
         # Train the actor
         Jt1 = Jt1.flatten()[0]
-        chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
+        if self.input_tracking_error:
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1, 1]).T, dJt1_dxt1)
+        else:
+            chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
         if self.time_step > self.start_training:
             for count in range(len(self.dut_dWb)):
@@ -225,10 +248,7 @@ class Actor:
                                                                             self.model.trainable_variables[count].shape))
 
                 # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-                WB_variable = self.model.trainable_variables[count].numpy()
-                WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-                WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-                self.model.trainable_variables[count].assign(WB_variable)
+                self.check_WB_limits(count)
 
         # Code for checking if the actor NN error with the new weights has changed sign
         ut_after = self.evaluate_actor()
@@ -253,7 +273,10 @@ class Actor:
 
         # Train the actor
         Jt1 = Jt1.flatten()[0]
-        chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
+        if self.input_tracking_error:
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T, dJt1_dxt1)
+        else:
+            chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
         if self.time_step > self.start_training:
             for count in range(len(self.dut_dWb)):
@@ -274,10 +297,7 @@ class Actor:
                                                                             self.model.trainable_variables[count].shape))
 
                 # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-                WB_variable = self.model.trainable_variables[count].numpy()
-                WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-                WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-                self.model.trainable_variables[count].assign(WB_variable)
+                self.check_WB_limits(count)
 
         # Code for checking if the actor NN error with the new weights has changed sign
         ut_after = self.evaluate_actor()
@@ -285,6 +305,17 @@ class Actor:
         Jt1_after, _ = critic.evaluate_critic(xt1_est_after, xt_ref1)
         Ec_actor_after = 0.5 * np.square(Jt1_after)
         print("ACTOR LOSS xt1 after= ", Ec_actor_after)
+
+    def check_WB_limits(self, count):
+        """
+        Check whether any of the weights and biases exceed the limit imposed (WB_limits) and saturate the values
+        :param count: index within the model.trainable_variables being analysed
+        :return:
+        """
+        WB_variable = self.model.trainable_variables[count].numpy()
+        WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+        WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+        self.model.trainable_variables[count].assign(WB_variable)
 
 
     # def train_actor_online_adam(self, Jt, critic_derivative, G):
@@ -319,19 +350,38 @@ class Actor:
     #         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
     #         self.model.trainable_variables[count].assign(WB_variable)
 
-    def compute_persistent_excitation(self):
+    def compute_persistent_excitation(self, *args):
         """
         Computation of the persistent excitation at each time step. Formula obtained from Pedro's thesis
         :return: e0 --> PE deviation
         """
-        t = self.time_step + 1
+        if len(args) == 1:
+            t = args[0] + 1
+        elif len(args) == 0:
+            t = self.time_step + 1
+
         # e0 = 0.3 * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
         #                 np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
         #                 np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)
 
-        e0 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
-                        np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
-                        np.cos(2.4 * t) * np.sin(2.4 * t) ** 3) / 10
+        if self.type_PE == 'sinusoidal':
+            e0 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
+                            np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
+                            np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)
+        elif self.type_PE == '3211':
+            if t < 3 * self.pulse_length_3211:
+                e0 = self.amplitude_3211
+            elif t < 5 * self.pulse_length_3211:
+                e0 = -self.amplitude_3211
+            elif t < 6 * self.pulse_length_3211:
+                e0 = self.amplitude_3211
+            elif t < 7 * self.pulse_length_3211:
+                e0 = self.amplitude_3211
+            else:
+                e0 = 0
+        else:
+            e0 = 0
+
         return e0
 
     def update_actor_attributes(self):
@@ -349,15 +399,32 @@ class Actor:
         :return: ut --> input to the system and the incremental model
         """
         if len(args) == 0:
-            nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
-            ut = self.model(nn_input).numpy()
+            xt = self.xt
+            xt_ref = self.xt_ref
+        elif len(args) == 1:
+            xt = self.xt
+            xt_ref = self.xt_ref
+            time_step = args[0]
         elif len(args) == 2:
             xt = args[0]
             xt_ref = args[1]
-            nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
-            ut = self.model(nn_input).numpy()
         else:
             raise Exception("THERE SHOULD BE AN OUTPUT in the evaluate_actor function.")
+
+        if self.input_tracking_error:
+            tracked_states = np.reshape(xt[self.indices_tracking_states, :], [-1, 1])
+            xt_error = np.reshape(tracked_states - xt_ref, [-1, 1])
+            nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
+        else:
+            nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
+
+        ut = self.model(nn_input).numpy()
+        if len(args) == 1:
+            e0 = self.compute_persistent_excitation(time_step)
+        else:
+            e0 = self.compute_persistent_excitation()
+        ut = max(min((2 * self.maximum_input * ut) - self.maximum_input + e0, self.maximum_input),
+                      -self.maximum_input)
         return ut
 
     def restart_actor(self):

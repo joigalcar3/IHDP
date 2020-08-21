@@ -124,7 +124,7 @@ class IncrementalModel:
         # Obtain the A matrix and the x vector
         A_LS_matrix = self.build_A_LS_matrix()
         x_LS_vector = self.build_x_LS_vector()
-        identified_matrices = np.matmul(np.matmul(np.linalg.inv(np.matmul(A_LS_matrix.T, A_LS_matrix)), A_LS_matrix.T),
+        identified_matrices = np.matmul(np.matmul(np.linalg.pinv(np.matmul(A_LS_matrix.T, A_LS_matrix)), A_LS_matrix.T),
                                         x_LS_vector).T
         self.F = identified_matrices[:, :self.number_states]
         self.G = identified_matrices[:, self.number_states:]

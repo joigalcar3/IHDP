@@ -31,9 +31,9 @@ __status__ = "Production"
 class Critic:
 
     def __init__(self, Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
-                 start_training, gamma=1, learning_rate=20, learning_rate_exponent_limit=10, layers=(6, 1),
-                 activations=("tanh", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
-                 input_include_reference=True, WB_limits=30):
+                 start_training, gamma=0.8, learning_rate=2, learning_rate_exponent_limit=10, layers=(6, 1),
+                 activations=("sigmoid", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
+                 input_include_reference=False, input_tracking_error=True, WB_limits=30):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
         self.number_tracking_states = len(tracking_states)
@@ -45,7 +45,7 @@ class Critic:
         self.ct = 0
         self.ct_1 = 0
         self.Jt = 0
-        self.Jt_1 = 1
+        self.Jt_1 = 0
 
         if len(Q_weights)<self.number_tracking_states:
             raise Exception("The size of Q_weights needs to equal the number of states")
@@ -72,6 +72,7 @@ class Critic:
         self.tensorboard_callback = None
         self.activate_tensorboard = activate_tensorboard
         self.input_include_reference = input_include_reference
+        self.input_tracking_error = input_tracking_error
 
         # Declaration of attributes related to the cost function
         if not(0 <= gamma <= 1):
@@ -106,12 +107,14 @@ class Critic:
         can decide the number of layers, the number of neurons, as well as the activation function.
         :return:
         """
-        initializer = tf.keras.initializers.GlorotNormal()
-        # initializer = tf.keras.initializers.VarianceScaling(
-        #     scale=0.04, mode='fan_in', distribution='truncated_normal', seed=None)
+        # initializer = tf.keras.initializers.GlorotNormal()
+        initializer = tf.keras.initializers.VarianceScaling(
+            scale=0.001, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
         if self.input_include_reference:
             self.model.add(Flatten(input_shape=(self.number_states + self.number_tracking_states, 1), name='Flatten_1'))
+        elif self.input_tracking_error:
+            self.model.add(Flatten(input_shape=(self.number_tracking_states, 1), name='Flatten_1'))
         else:
             self.model.add(Flatten(input_shape=(self.number_states, 1), name='Flatten_1'))
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
@@ -291,6 +294,11 @@ class Critic:
             if self.input_include_reference:
                 xt_1, xt_ref_1, xt, xt_ref, ct_1 = replay
                 nn_input_1 = tf.constant(np.array([np.vstack((xt_1, xt_ref_1))]).astype('float32'))
+            elif self.input_tracking_error:
+                xt_1, xt_ref_1, xt, xt_ref, ct_1 = replay
+                tracked_states = np.reshape(xt_1[self.indices_tracking_states, :], [-1, 1])
+                xt_error = np.reshape(tracked_states - xt_ref_1, [-1, 1])
+                nn_input_1 = tf.constant(np.array([(xt_error)]).astype('float32'))
             else:
                 xt_1, xt, ct_1 = replay
                 xt_ref = 0
@@ -361,10 +369,12 @@ class Critic:
         # Define the input to the critic NN
         if self.input_include_reference:
             nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
-            # nn_input_1 = tf.constant(np.array([np.vstack((xt_1, xt_ref_1))]).astype('float32'))     # TEMPORAL
+        elif self.input_tracking_error:
+            tracked_states = np.reshape(xt[self.indices_tracking_states, :], [-1, 1])
+            xt_error = np.reshape(tracked_states-xt_ref, [-1, 1])
+            nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
         else:
             nn_input = tf.constant(np.array([(xt)]).astype('float32'))
-            # nn_input_1 = tf.constant(np.array([(xt_1)]).astype('float32'))     # TEMPORAL
 
         # Run the input through the network watching the weights and biases for later derivatives
         with tf.GradientTape() as tape:
@@ -384,7 +394,6 @@ class Critic:
         if not replay:
             self.Jt = prediction.numpy()
             self.store_J[:, self.time_step] = np.reshape(self.Jt, [-1])
-            # self.Jt_1 = self.model(nn_input_1).numpy()     # TEMPORAL
             return nn_input, dJt_dW
         else:
             Jt = prediction.numpy()
@@ -400,22 +409,31 @@ class Critic:
         """
         # In the case that there are no inputs, obtain data from the object attributes
         if len(args) == 0:
-            Jt_1 = self.Jt_1
+            if self.input_include_reference:
+                nn_input_1 = tf.constant(np.array([np.vstack((self.xt_1, self.xt_ref_1))]).astype('float32'))
+            elif self.input_tracking_error:
+                tracked_states = np.reshape(self.xt_1[self.indices_tracking_states, :], [-1, 1])
+                xt_1_error = np.reshape(tracked_states - self.xt_ref_1, [-1, 1])
+                nn_input_1 = tf.constant(np.array([(xt_1_error)]).astype('float32'))
+            else:
+                nn_input_1 = tf.constant(np.array([(self.xt_1)]).astype('float32'))
+
+            self.Jt_1 = self.model(nn_input_1).numpy()
             Jt = self.Jt
             target = self.targets_computation_online()
         elif len(args) == 3:
-            Jt_1 = args[0]
+            self.Jt_1 = args[0]
             Jt = args[1]
             ct_1 = args[2]
             target = self.targets_computation_online(Jt, ct_1)
         else:
-            Jt_1 = 0
+            self.Jt_1 = 0
             Jt = 0
             target = 0
             Exception("Unexpected number of arguments.")
 
         # Compute the network error
-        ec_critic_before = target + Jt_1
+        ec_critic_before = target + self.Jt_1
 
         # Compute the derivative of the loss function with respect to the critic network output (Jt)
         dE_dJ = -self.gamma * ec_critic_before
@@ -490,6 +508,10 @@ class Critic:
         """
         if self.input_include_reference:
             nn_input = tf.constant(np.array([np.vstack((xt, xt_ref))]).astype('float32'))
+        elif self.input_tracking_error:
+            tracked_states = np.reshape(xt[self.indices_tracking_states, :], [-1, 1])
+            xt_error = np.reshape(tracked_states - xt_ref, [-1, 1])
+            nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
         else:
             nn_input = tf.constant(np.array([(xt)]).astype('float32'))
         with tf.GradientTape() as tape:
@@ -580,7 +602,6 @@ class Critic:
         self.time_step += 1
         self.ct_1 = self.ct
         self.xt_1 = self.xt
-        self.Jt_1 = self.Jt
         self.xt_ref_1 = self.xt_ref
 
     def restart_critic(self):
