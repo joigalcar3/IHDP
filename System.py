@@ -171,7 +171,7 @@ class F16System(System):
         self.xt = x0
         self.store_states[:, self.time_step] = np.reshape(self.xt, [-1, ])
 
-    def run_step(self, ut):
+    def run_step(self, ut_0):
         """
         Runs one time step of the iteration.
         :param ut: input to the system
@@ -180,8 +180,8 @@ class F16System(System):
         if self.time_step != 0:
             ut_1 = self.store_input[:, self.time_step - 1]
         else:
-            ut_1 = ut
-        ut = max(min(max(min(ut,
+            ut_1 = ut_0
+        ut = max(min(max(min(ut_0,
                              np.reshape(np.array([ut_1 + self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                          np.reshape(np.array([ut_1 - self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                      np.array([[self.input_magnitude_limits]])),

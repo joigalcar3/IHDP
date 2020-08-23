@@ -38,7 +38,7 @@ class IncrementalModel:
         self.number_time_steps = number_time_steps
         self.number_states = len(selected_states)
         self.number_inputs = len(selected_input)
-        self.L = 1 * (self.number_inputs + self.number_states)
+        self.L = 2 * (self.number_inputs + self.number_states)
         self.store_delta_xt = np.zeros((self.number_states, self.number_time_steps))
         self.store_delta_xt_0 = np.random.rand(self.number_states, self.L)
         self.store_delta_ut = np.zeros((self.number_inputs, self.number_time_steps))
@@ -101,7 +101,7 @@ class IncrementalModel:
 
         return x_LS_vector
 
-    def identify_incremental_model_LS(self, xt, ut):
+    def identify_incremental_model_LS(self, xt, ut_0):
         """
         Computes the F and G matrices of the system identification
         :param xt: current time step states
@@ -110,12 +110,13 @@ class IncrementalModel:
         """
         # Verifying that the inputs meets the platforms constraints
         if self.time_step == 0:
-            self.ut_1 = np.zeros(ut.shape)
-        ut = max(min(max(min(ut,
+            self.ut_1 = ut_0
+        ut = max(min(max(min(ut_0,
                              np.reshape(np.array([self.ut_1 + self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                          np.reshape(np.array([self.ut_1 - self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                      np.array([[self.input_magnitude_limits]])),
                  - np.array([[self.input_magnitude_limits]]))
+
         # Store the input variables
         self.xt = xt
         self.ut = ut
@@ -142,7 +143,16 @@ class IncrementalModel:
             return self.xt1_est
         elif len(args) == 1:
             # Estimate the next time step states
-            delta_ut = args[0] - self.ut_1
+            ut_0 = args[0]
+            ut = max(min(max(min(ut_0,
+                                 np.reshape(np.array([self.ut_1 + self.input_rate_limits * self.discretisation_time]),
+                                            [-1, 1])),
+                             np.reshape(np.array([self.ut_1 - self.input_rate_limits * self.discretisation_time]),
+                                        [-1, 1])),
+                         np.array([[self.input_magnitude_limits]])),
+                     - np.array([[self.input_magnitude_limits]]))
+
+            delta_ut = ut - self.ut_1
             xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, delta_ut)
             return xt1_est
 

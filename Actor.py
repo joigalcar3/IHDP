@@ -17,6 +17,7 @@ of epochs and activation functions.
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.layers import Dense, Flatten
+import tensorflow_addons as tfa
 
 
 "----------------------------------------------------------------------------------------------------------------------"
@@ -34,8 +35,8 @@ __status__ = "Production"
 class Actor:
     def __init__(self, selected_inputs, selected_states, tracking_states, indices_tracking_states,
                  number_time_steps, start_training, layers=(6, 1), activations=('sigmoid', 'sigmoid'), batch_size=1,
-                 epochs=1, learning_rate=2, learning_rate_exponent_limit=10, only_track_xt_input=False,
-                 input_tracking_error=True, type_PE='3211', amplitude_3211=4, pulse_length_3211=10, WB_limits=30,
+                 epochs=1, learning_rate=0.9, learning_rate_exponent_limit=10, only_track_xt_input=False,
+                 input_tracking_error=True, type_PE='3211', amplitude_3211=1, pulse_length_3211=15, WB_limits=30,
                  maximum_input=25):
         self.number_inputs = len(selected_inputs)
         self.number_states = len(selected_states)
@@ -96,8 +97,9 @@ class Actor:
         """
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=0.001, mode='fan_in', distribution='truncated_normal', seed=None)
+            scale=0.01, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
+
         if self.only_track_xt_input:
             self.model.add(Flatten(input_shape=(len(self.indices_tracking_states) + self.number_tracking_states, 1),
                                    name='Flatten_1'))
@@ -106,14 +108,23 @@ class Actor:
                                   name='Flatten_1'))
         else:
             self.model.add(Flatten(input_shape=(self.number_states + self.number_tracking_states, 1), name='Flatten_1'))
+
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
                              name='dense_1'))
+
+        # self.model.add(tfa.layers.WeightNormalization(
+        #     Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
+        #           name='dense_1')))
+
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+2)))
-        self.model.compile(optimizer='SGD',
-                           loss='mean_squared_error',
-                           metrics=['accuracy'])
+            # self.model.add(
+            #     tfa.layers.WeightNormalization(Dense(self.layers[counter + 1], activation=self.activations[counter + 1],
+            #                                          kernel_initializer=initializer, name='dense_' + str(counter + 2))))
+        # self.model.compile(optimizer='SGD',
+        #                    loss='mean_squared_error',
+        #                    metrics=['accuracy'])
 
         for count in range(len(self.model.trainable_variables)):
             self.momentum_dict[count] = 0
@@ -163,7 +174,8 @@ class Actor:
         """
         Jt1 = Jt1.flatten()[0]
         if self.input_tracking_error:
-            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T, dJt1_dxt1)
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T,
+                                         max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
         else:
             chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
@@ -306,6 +318,45 @@ class Actor:
         Ec_actor_after = 0.5 * np.square(Jt1_after)
         print("ACTOR LOSS xt1 after= ", Ec_actor_after)
 
+    def train_actor_online_BO(self, Jt1, dJt1_dxt1, G, incremental_model, critic, system, xt_ref1):
+        """
+        Train the actor with an adaptive alpha depending on the sign and magnitude of the network errors
+        :param Jt1: the evaluation of the critic with the next time step prediction of the incremental model
+        :param dJt1_dxt1: the gradient of the critic network with respect to the next time prediction of the incremental model
+        :param G: the input distribution matrix
+        :param indices_tracking_states: the states of the system that are being tracked
+        :param incremental_model: the incremental model
+        :param critic: the critic
+        :return:
+        """
+        Ec_actor_before = 0.5 * np.square(Jt1)
+        print("ACTOR LOSS xt1 before= ", Ec_actor_before)
+
+        # Train the actor
+        Jt1 = Jt1.flatten()[0]
+        if self.input_tracking_error:
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T,
+                                         max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
+        else:
+            chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
+        chain_rule = chain_rule.flatten()[0]
+        if self.time_step > self.start_training:
+            for count in range(len(self.dut_dWb)):
+                gradient = chain_rule * self.dut_dWb[count]
+                self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * gradient,
+                                                                            self.model.trainable_variables[count].shape))
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+            # Update the learning rate
+            self.learning_rate = max(self.learning_rate * 0.995, 0.001)
+        # Code for checking if the actor NN error with the new weights has changed sign
+        ut_after = self.evaluate_actor()
+        # incremental_model.identify_incremental_model_LS(self.xt, ut_after)
+        xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
+        Jt1_after, _ = critic.evaluate_critic(xt1_est_after, xt_ref1)
+        Ec_actor_after = 0.5 * np.square(Jt1_after)
+        print("ACTOR LOSS xt1 after= ", Ec_actor_after)
+
     def check_WB_limits(self, count):
         """
         Check whether any of the weights and biases exceed the limit imposed (WB_limits) and saturate the values
@@ -316,39 +367,6 @@ class Actor:
         WB_variable[WB_variable > self.WB_limits] = self.WB_limits
         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
         self.model.trainable_variables[count].assign(WB_variable)
-
-
-    # def train_actor_online_adam(self, Jt, critic_derivative, G):
-    #     """
-    #     Obtains the elements of the chain rule, computes the gradient and applies it to the corresponding weights and
-    #     biases with the Adam optimizer.
-    #     :param Jt: dEa/dJ
-    #     :param critic_derivative: dJ/dx
-    #     :param G: dx/du, obtained from the incremental model
-    #     :return:
-    #     """
-    #     # Set up the Adam optimizer
-    #     if self.time_step == 0:
-    #         self.Adam_opt = tf.optimizers.Adam(learning_rate=self.learning_rate, decay=1e-6)
-    #     Jt = Jt.flatten()[0]
-    #     critic_derivative = np.reshape(critic_derivative[:self.number_states, :], [self.number_states, 1])
-    #     chain_rule = Jt * np.matmul(G.T, critic_derivative)
-    #     chain_rule = chain_rule.flatten()[0]
-    #     update = [tf.Variable(chain_rule * self.dut_dWb[i]) for i in range(len(self.dut_dWb))]
-    #     update = [tf.Variable(np.reshape(update[i].numpy(), [-1, ]))
-    #               if len(self.model.trainable_variables[i].shape) == 1
-    #               else np.reshape(update[i].numpy(), [-1, self.model.trainable_variables[i].shape[1]])
-    #               for i in range(len(update))]
-    #
-    #     # Apply the Adam optimizer
-    #     self.Adam_opt.apply_gradients(zip(update, [self.model.trainable_variables[i].numpy() for i in range(len(self.model.trainable_variables))]))
-    #
-    #     for count in range(len(self.dut_dWb)):
-    #         # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-    #         WB_variable = self.model.trainable_variables[count].numpy()
-    #         WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-    #         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-    #         self.model.trainable_variables[count].assign(WB_variable)
 
     def compute_persistent_excitation(self, *args):
         """
@@ -376,7 +394,7 @@ class Actor:
             elif t < 6 * self.pulse_length_3211:
                 e0 = self.amplitude_3211
             elif t < 7 * self.pulse_length_3211:
-                e0 = self.amplitude_3211
+                e0 = -self.amplitude_3211
             else:
                 e0 = 0
         else:
@@ -424,7 +442,7 @@ class Actor:
         else:
             e0 = self.compute_persistent_excitation()
         ut = max(min((2 * self.maximum_input * ut) - self.maximum_input + e0, self.maximum_input),
-                      -self.maximum_input)
+                 - self.maximum_input)
         return ut
 
     def restart_actor(self):

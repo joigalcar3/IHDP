@@ -31,8 +31,8 @@ __status__ = "Production"
 class Critic:
 
     def __init__(self, Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
-                 start_training, gamma=0.8, learning_rate=2, learning_rate_exponent_limit=10, layers=(6, 1),
-                 activations=("sigmoid", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
+                 start_training, gamma=0.8, learning_rate=2, learning_rate_exponent_limit=10, layers=(10, 6, 1),
+                 activations=("sigmoid", "sigmoid", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
                  input_include_reference=False, input_tracking_error=True, WB_limits=30):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
@@ -83,6 +83,7 @@ class Critic:
         self.learning_rate_exponent_limit = learning_rate_exponent_limit
         self.WB_limits = WB_limits
         self.store_J = np.zeros((1, self.number_time_steps))
+        self.store_J_1 = np.zeros((1, self.number_time_steps))
         self.store_c = np.zeros((1, self.number_time_steps))
 
         # Declaration of storage arrays for online training
@@ -109,7 +110,9 @@ class Critic:
         """
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=0.001, mode='fan_in', distribution='truncated_normal', seed=None)
+            scale=0.01, mode='fan_in', distribution='truncated_normal', seed=None)
+        # initializer = tf.keras.initializers.VarianceScaling(
+        #     scale=1, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
         if self.input_include_reference:
             self.model.add(Flatten(input_shape=(self.number_states + self.number_tracking_states, 1), name='Flatten_1'))
@@ -123,9 +126,9 @@ class Critic:
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+1)))
-        self.model.compile(optimizer='adam',
-                           loss='mean_squared_error',
-                           metrics=['accuracy'])
+        # self.model.compile(optimizer='adam',
+        #                    loss='mean_squared_error',
+        #                    metrics=['accuracy'])
 
         for count in range(len(self.model.trainable_variables)):
             self.momentum_dict[count] = 0
@@ -134,44 +137,6 @@ class Critic:
         if self.activate_tensorboard:
             logdir = "logs/fit/" + datetime.now().strftime("%Y%m%d-%H%M%S")
             self.tensorboard_callback = keras.callbacks.TensorBoard(log_dir=logdir)
-
-    # def run_train_critic_online(self, xt, xt_ref):
-    #     """
-    #     Function that evaluates once the critic neural network and returns the value of J(xt). At the same
-    #     time, it trains the function approximator every number of time steps equal to the chosen batch size.
-    #     :param xt: current time step states
-    #     :param xt_ref: current time step reference states for the computation of the one-step cost function
-    #     :return: Jt --> evaluation of the critic at the current time step
-    #             dJt_dxt --> gradient of dJt/dxt necessary for actor weight update
-    #     """
-    #     self.xt = xt
-    #     self.xt_ref = xt_ref
-    #     self.ct = self.c_computation()
-    #
-    #     nn_input = tf.constant(np.array([self.xt]).astype('float32'))
-    #     with tf.GradientTape() as tape:
-    #         tape.watch(nn_input)
-    #         prediction = self.model(nn_input)
-    #
-    #     self.Jt = prediction.numpy()
-    #     self.dJt_dxt = tape.gradient(prediction, nn_input).numpy()
-    #
-    #     target = self.targets_computation_online()
-    #     inputs = np.reshape(self.xt_1, [1, self.number_states, 1])
-    #     self.store_targets[self.time_step % self.batch_size, :] = target
-    #     self.store_inputs[self.time_step % self.batch_size, :, :] = inputs
-    #
-    #     if (self.time_step+1) % self.batch_size == 0:
-    #         if self.activate_tensorboard:
-    #             self.model.fit(self.store_inputs, self.store_targets, batch_size=self.batch_size, epochs=self.epochs,
-    #                            verbose=2, callbacks=[self.tensorboard_callback])
-    #         else:
-    #             self.model.fit(self.store_inputs, self.store_targets, batch_size=self.batch_size, epochs=self.epochs,
-    #                            verbose=2)
-    #     self.time_step += 1
-    #     self.ct_1 = self.ct
-    #     self.xt_1 = self.xt
-    #     return self.Jt, self.dJt_dxt
 
     def run_train_critic_online_adaptive_alpha(self, xt, xt_ref):
         """
@@ -271,6 +236,46 @@ class Critic:
         ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
         Ec_critic_after = 0.5 * np.square(ec_critic_after)
         print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        return self.Jt
+
+    def run_train_critic_online_BO(self, xt, xt_ref):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+        time, it trains the function approximator every number of time steps equal to the chosen batch size.
+        :param xt: current time step states
+        :param xt_ref: current time step reference states for the computation of the one-step cost function
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        # Safe the information in the replay attribute
+        if self.input_include_reference:
+            self.replay.append((self.xt_1, self.xt_ref_1, xt, xt_ref, self.ct_1))
+        else:
+            self.replay.append((self.xt_1, xt, self.ct_1))
+
+        # Obtain the forward pass of the critic and the derivatives of the output with respect to the weights and biases
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+
+        # Obtain the derivative of the loss with respect to the critic NN output (Jt)
+        dE_dJ, _, _ = self.compute_loss_derivative()
+
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW)):
+                gradient = dE_dJ * dJt_dW[count]
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * gradient, self.model.trainable_variables[count].shape))
+
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                # self.check_WB_limits(count)
+
+        # Check the impact of the update on the critic loss function
+        updated_Jt = self.model(nn_input)
+        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        # Update the learning rate
+        self.learning_rate = max(self.learning_rate * 0.995, 0.001)
 
         return self.Jt
 
@@ -434,6 +439,7 @@ class Critic:
 
         # Compute the network error
         ec_critic_before = target + self.Jt_1
+        self.store_J_1[:, self.time_step] = np.reshape(self.Jt_1, [-1])
 
         # Compute the derivative of the loss function with respect to the critic network output (Jt)
         dE_dJ = -self.gamma * ec_critic_before
@@ -457,48 +463,6 @@ class Critic:
         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
         self.model.trainable_variables[count].assign(WB_variable)
 
-    # def run_train_critic_online(self, xt, xt_ref):
-    #     """
-    #     Function that evaluates once the critic neural network and returns the value of J(xt). At the same
-    #     time, it trains the function approximator every number of time steps equal to the chosen batch size.
-    #     :param xt: current time step states
-    #     :param xt_ref: current time step reference states for the computation of the one-step cost function
-    #     :return: Jt --> evaluation of the critic at the current time step
-    #             dJt_dxt --> gradient of dJt/dxt necessary for actor weight update
-    #     """
-    #     self.xt = xt
-    #     self.xt_ref = xt_ref
-    #     self.ct = self.c_computation()
-    #
-    #     nn_input = tf.constant(np.array([np.vstack((self.xt, self.xt_ref))]).astype('float32'))
-    #     with tf.GradientTape() as tape:
-    #         tape.watch(self.model.trainable_variables)
-    #         prediction = self.model(nn_input)
-    #
-    #     self.Jt = prediction.numpy()
-    #     dJt_dW = tape.gradient(prediction, self.model.trainable_variables)
-    #
-    #     target = self.targets_computation_online()
-    #     ec_critic_before = target - self.Jt_1
-    #     dE_dJ = self.gamma * ec_critic_before
-    #
-    #     EC_critic_before = 0.5 * np.square(ec_critic_before)
-    #     Ec_actor_before = 0.5 * np.square(self.Jt)
-    #     print("CRITIC LOSS = ", EC_critic_before)
-    #     print("ACTOR LOSS = ", Ec_actor_before)
-    #     for count in range(len(dJt_dW)):
-    #         update = dE_dJ * dJt_dW[count]
-    #         self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
-    #                                                                     self.model.trainable_variables[count].shape))
-    #
-    #         # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-    #         WB_variable = self.model.trainable_variables[count].numpy()
-    #         WB_variable[WB_variable > self.WB_limits] = self.WB_limits
-    #         WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
-    #         self.model.trainable_variables[count].assign(WB_variable)
-    #
-    #     return self.Jt
-
     def evaluate_critic(self, xt, xt_ref):
         """
         Function that evaluates once the critic neural network and returns the value of J(xt).
@@ -514,6 +478,7 @@ class Critic:
             nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
         else:
             nn_input = tf.constant(np.array([(xt)]).astype('float32'))
+
         with tf.GradientTape() as tape:
             tape.watch(nn_input)
             prediction = self.model(nn_input)
@@ -526,38 +491,6 @@ class Critic:
 
         return Jt, dJt_dxt
 
-
-
-    # def run_critic(self, xt, xt_ref):
-    #     """
-    #     Function which evaluates the critic only once and returns the cost function at the current time step
-    #     :param xt: current time step states
-    #     :param xt_ref: current time step reference states for the computation of the one-step cost function
-    #     :return: Jt --> evaluation of the critic at the current time step
-    #     """
-    #     self.xt = xt
-    #     self.store_states[self.time_step, :, 0] = np.reshape(self.xt, [4,])
-    #     self.xt_ref = xt_ref
-    #     self.c_computation()
-    #
-    #     nn_input = np.array([self.xt])
-    #     Jt = self.model.predict(nn_input)
-    #     self.store_J[0, self.time_step] = Jt
-    #
-    #     self.time_step += 1
-    #     return Jt
-    #
-    # def train_critic_end(self):
-    #     """
-    #     Function which trains the model at the end of a full episode with the stored one-step cost function
-    #     and the cost function
-    #     :return:
-    #     """
-    #     targets = self.targets_computation_end()
-    #     inputs = self.store_states[:-1, :, :]
-    #
-    #     self.model.fit(inputs, targets, batch_size=self.batch_size, epochs=self.epochs, verbose=2)
-
     def c_computation(self):
         """
         Computation of the one-step cost function with the received real and reference states.
@@ -567,15 +500,6 @@ class Critic:
                                  self.Q), (np.reshape(self.xt[self.indices_tracking_states, :], [-1, 1]) - self.xt_ref))
         self.store_c[0, self.time_step] = ct[0]
         return ct
-
-    # def targets_computation_end(self):
-    #     """
-    #     Computes the targets at the end of an episode with the stored one-step cost function (ct_1) and
-    #     the stored cost functions (Jt).
-    #     :return: targets --> targets of the complete episode
-    #     """
-    #     targets = np.reshape(self.store_c[0, :-1] + self.gamma * self.store_J[0, 1:], [-1, 1])
-    #     return targets
 
     def targets_computation_online(self, *args):
         """
