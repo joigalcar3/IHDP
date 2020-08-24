@@ -6,6 +6,7 @@ end of the episode. The user can decide the number of layers, the number of neur
 of epochs and activation functions. If trained online, the algorithm trains the Network after the number of collected
 data points equals the batch size. This means that if the batch size is 10, then the NN is updated every 10 time steps.
 """
+from typing import Any, Union, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -90,6 +91,9 @@ class Critic:
         self.store_inputs = np.zeros((self.batch_size, self.number_states, 1))
         self.store_targets = np.zeros((self.batch_size, 1))
 
+        # Declaration of the storage arrays for the weights
+        self.store_weights = {}
+
         # Attributes related to the momentum
         self.momentum_dict = {}
         self.beta_momentum = 0.9
@@ -122,13 +126,17 @@ class Critic:
             self.model.add(Flatten(input_shape=(self.number_states, 1), name='Flatten_1'))
         self.model.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
                              name='dense_0'))
-        # self.model.add(Dropout(0.1, name='Dropout_0'))
+
+        self.store_weights['W1'] = np.zeros((self.number_tracking_states * self.layers[0], self.number_time_steps))
+        self.store_weights['W1'][:, self.time_step] = self.model.trainable_variables[0].numpy().flatten()
+
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+1)))
-        # self.model.compile(optimizer='adam',
-        #                    loss='mean_squared_error',
-        #                    metrics=['accuracy'])
+            self.store_weights['W' + str(counter+2)] = np.zeros((self.layers[counter] * self.layers[counter+1], self.number_time_steps))
+            self.store_weights['W' + str(counter + 2)][:, self.time_step] = self.model.trainable_variables[
+                counter * 2].numpy().flatten()
+
 
         for count in range(len(self.model.trainable_variables)):
             self.momentum_dict[count] = 0
@@ -255,6 +263,7 @@ class Critic:
 
         # Obtain the forward pass of the critic and the derivatives of the output with respect to the weights and biases
         nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        nn_input_1, _, _ = self.compute_forward_pass(self.xt_1, self.xt_ref_1, replay=True)
 
         # Obtain the derivative of the loss with respect to the critic NN output (Jt)
         dE_dJ, _, _ = self.compute_loss_derivative()
@@ -270,12 +279,58 @@ class Critic:
 
         # Check the impact of the update on the critic loss function
         updated_Jt = self.model(nn_input)
-        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
+        updated_Jt_1 = self.model(nn_input_1)
+        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + updated_Jt_1
         Ec_critic_after = 0.5 * np.square(ec_critic_after)
         print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         # Update the learning rate
         self.learning_rate = max(self.learning_rate * 0.995, 0.001)
+
+        return self.Jt
+
+    def run_train_critic_online_BO_papers(self, xt, xt_ref):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+        time, it trains the function approximator every number of time steps equal to the chosen batch size.
+        :param xt: current time step states
+        :param xt_ref: current time step reference states for the computation of the one-step cost function
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        # Safe the information in the replay attribute
+        if self.input_include_reference:
+            self.replay.append((self.xt_1, self.xt_ref_1, xt, xt_ref, self.ct_1))
+        else:
+            self.replay.append((self.xt_1, xt, self.ct_1))
+
+        # Obtain the forward pass of the critic and the derivatives of the output with respect to the weights and biases
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        nn_input_1, dJt_dW_1, _ = self.compute_forward_pass(self.xt_1, self.xt_ref_1, replay=True)
+
+        # Obtain the derivative of the loss with respect to the critic NN output (Jt)
+        dE_dJ, ec_critic_before, _ = self.compute_loss_derivative()
+        dE_dJ = ec_critic_before
+
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW_1)):
+                gradient = dE_dJ * dJt_dW_1[count]
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * gradient, self.model.trainable_variables[count].shape))
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+
+                if count % 2 == 1:
+                    self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
+
+            # Update the learning rate
+            self.learning_rate = max(self.learning_rate * 0.995, 0.001)
+
+        # Check the impact of the update on the critic loss function
+        updated_Jt = self.model(nn_input)
+        updated_Jt_1 = self.model(nn_input_1)
+        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + updated_Jt_1
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         return self.Jt
 
@@ -370,6 +425,8 @@ class Critic:
             self.xt = xt
             self.xt_ref = xt_ref
             self.ct = self.c_computation()
+            if self.time_step == 0:
+                self.ct_1 = self.ct
 
         # Define the input to the critic NN
         if self.input_include_reference:
@@ -414,14 +471,9 @@ class Critic:
         """
         # In the case that there are no inputs, obtain data from the object attributes
         if len(args) == 0:
-            if self.input_include_reference:
-                nn_input_1 = tf.constant(np.array([np.vstack((self.xt_1, self.xt_ref_1))]).astype('float32'))
-            elif self.input_tracking_error:
-                tracked_states = np.reshape(self.xt_1[self.indices_tracking_states, :], [-1, 1])
-                xt_1_error = np.reshape(tracked_states - self.xt_ref_1, [-1, 1])
-                nn_input_1 = tf.constant(np.array([(xt_1_error)]).astype('float32'))
-            else:
-                nn_input_1 = tf.constant(np.array([(self.xt_1)]).astype('float32'))
+            tracked_states = np.reshape(self.xt_1[self.indices_tracking_states, :], [-1, 1])
+            xt_1_error = np.reshape(tracked_states - self.xt_ref_1, [-1, 1])
+            nn_input_1 = tf.constant(np.array([(xt_1_error)]).astype('float32'))
 
             self.Jt_1 = self.model(nn_input_1).numpy()
             Jt = self.Jt
@@ -523,10 +575,14 @@ class Critic:
         The attributes that change with every time step are updated
         :return:
         """
+
         self.time_step += 1
         self.ct_1 = self.ct
         self.xt_1 = self.xt
         self.xt_ref_1 = self.xt_ref
+
+        for counter in range(len(self.layers)):
+            self.store_weights['W' + str(counter+1)][:, self.time_step] = self.model.trainable_variables[counter*2].numpy().flatten()
 
     def restart_critic(self):
         """

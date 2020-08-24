@@ -36,39 +36,42 @@ input_rate_limits = 60
 number_time_steps = 1000
 
 # Inputs concerning the critic
-Q_weights = [10000]
+Q_weights = [100]
 tracking_states = ['alpha']
 indices_tracking_states = [selected_states.index(tracking_states[i]) for i in range(len(tracking_states))]
 critic_start_training = -1
-gamma = 1
-critic_learning_rate = 10
+gamma = 0.9
+critic_learning_rate = 1
 critic_learning_rate_exponent_limit = 10
-critic_layers = (6, 1)
+critic_layers = (12, 1)
 critic_activations = ("sigmoid", "linear")
 batch_size = 1
 epochs = 1
 activate_tensorboard = False
 input_include_reference = False
 critic_input_tracking_error = True
-WB_limits = 20
+WB_limits = 30
 
 # Inputs concerning the actor
 actor_start_training = 6
 actor_layers = (6, 1)
 actor_activations = ('sigmoid', 'sigmoid')
-actor_learning_rate = 10
+actor_learning_rate = 100000000
+actor_learning_rate_cascaded = 10000
 actor_learning_rate_exponent_limit = 10
 only_track_xt_input = False
 actor_input_tracking_error = True
 type_PE = '3211'
-amplitude_3211 = 1
-pulse_length_3211 = 15
+amplitude_3211 = 10
+pulse_length_3211 = 25
 maximum_input = 25
+maximum_q_rate = np.deg2rad(20)
+cascaded_actor = True
 
 # Inputs to the simulation
 random.seed(1)
 iterations = 50
-initial_states = np.array([[np.deg2rad(-1)], [0]])
+initial_states = np.array([[np.deg2rad(1)], [0]])
 time = np.arange(0, number_time_steps * discretisation_time, discretisation_time)
 reference_signals = np.reshape(np.deg2rad(10 * np.sin(0.5 * time)), [1, -1])
 

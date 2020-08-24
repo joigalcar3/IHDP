@@ -122,7 +122,8 @@ class Simulation:
             # _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
             # _ = self.critic.run_train_critic_online_momentum(self.xt, self.xt_ref)
             # _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref, self.iteration)
-            _ = self.critic.run_train_critic_online_BO(self.xt, self.xt_ref)
+            # _ = self.critic.run_train_critic_online_BO(self.xt, self.xt_ref)
+            _ = self.critic.run_train_critic_online_BO_papers(self.xt, self.xt_ref)
 
             # Evaluate the critic
             xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
@@ -137,8 +138,10 @@ class Simulation:
             #                                    self.incremental_model, self.critic, xt_ref1)
             # self.actor.train_actor_online_adam(Jt1, dJt1_dxt1, G,
             #                                    self.incremental_model, self.critic, xt_ref1, self.iteration)
-            self.actor.train_actor_online_BO(Jt1, dJt1_dxt1, G,
-                                             self.incremental_model, self.critic, self.system, xt_ref1)
+            # self.actor.train_actor_online_BO(Jt1, dJt1_dxt1, G,
+            #                                  self.incremental_model, self.critic, self.system, xt_ref1)
+            self.actor.train_actor_online_BO_papers(Jt1, dJt1_dxt1, G,
+                                                    self.incremental_model, self.critic, self.system, xt_ref1)
 
             # Update models attributes
             self.system.update_system_attributes()
@@ -150,10 +153,14 @@ class Simulation:
             self.xt = xt1
             self.xt_track = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
 
-            max_x_frame = 0
-            self.plot_state_results(max_x_frame)
-            self.plot_input_results(max_x_frame)
-            self.plot_training_critic(max_x_frame)
+            if self.time_step % 50 == 0:
+                max_x_frame = 0
+                self.plot_state_results(max_x_frame)
+                self.plot_input_results(max_x_frame)
+                self.plot_training_critic(max_x_frame)
+                self.plot_weights_critic(max_x_frame)
+                self.plot_weights_actor(max_x_frame)
+                self.plot_q_difference(max_x_frame)
 
     def plot_state_results(self, max_x_frame):
         """
@@ -230,6 +237,67 @@ class Simulation:
         plt.pause(0.0001)
         plt.show()
 
+    def plot_weights_critic(self, max_x_frame):
+        n_rows =len(self.critic.store_weights.keys())
+        time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
+
+        plt.figure(3 * self.iterations + self.iteration)
+        plt.clf()
+        for weight in range(n_rows):
+            W = self.critic.store_weights['W' + str(weight+1)]
+            plt.subplot(n_rows, 1, weight+1)
+            n_weights = W.shape[0]
+            for i in range(n_weights):
+                plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
+            plt.grid(True)
+            plt.title('CRITIC: W' + str(weight+1))
+            plt.pause(0.0001)
+        plt.tight_layout()
+        plt.show()
+
+    def plot_weights_actor(self, max_x_frame):
+        n_rows =len(self.actor.store_weights.keys())
+        time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
+
+        plt.figure(4 * self.iterations + self.iteration)
+        plt.clf()
+        for weight in range(n_rows):
+            W = self.actor.store_weights['W' + str(weight+1)]
+            plt.subplot(n_rows, 1, weight+1)
+            n_weights = W.shape[0]
+            for i in range(n_weights):
+                plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
+            plt.grid(True)
+            plt.title('ACTOR 1: W' + str(weight+1))
+        plt.tight_layout()
+
+        if self.actor.cascaded_actor:
+            plt.figure(5 * self.iterations + self.iteration)
+            plt.clf()
+            for weight in range(n_rows):
+                W = self.actor.store_weights_q['W' + str(weight + 1)]
+                plt.subplot(n_rows, 1, weight + 1)
+                n_weights = W.shape[0]
+                for i in range(n_weights):
+                    plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
+                plt.grid(True)
+                plt.title('ACTOR 2: W' + str(weight + 1))
+            plt.tight_layout()
+        plt.show()
+
+    def plot_q_difference(self, max_x_frame):
+        time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
+        plt.figure(6 * self.iterations + self.iteration)
+        plt.clf()
+        q = np.reshape(self.system.store_states[1, :min(len(self.time), self.time_step + max_x_frame)], [-1, 1])
+        q_ref = np.reshape(self.actor.store_q[0, :min(len(self.time), self.time_step + max_x_frame)], [-1, 1])
+        plt.plot(time, q, label='Real q')
+        plt.plot(time, q_ref, label='Reference q')
+        plt.legend()
+        plt.grid(True)
+        plt.pause(0.0001)
+        plt.show()
+
     def restart_iteration(self):
         """
         Restarts the different components of the controller in order to start a new iteration
@@ -252,9 +320,9 @@ if __name__ == "__main__":
     # Initialise all the elements of the simulation
     actor = Actor(selected_input, selected_states, tracking_states, indices_tracking_states,
                  number_time_steps, actor_start_training, actor_layers, actor_activations, batch_size,
-                 epochs, actor_learning_rate, actor_learning_rate_exponent_limit, only_track_xt_input,
+                 epochs, actor_learning_rate, actor_learning_rate_cascaded, actor_learning_rate_exponent_limit, only_track_xt_input,
                  actor_input_tracking_error, type_PE, amplitude_3211, pulse_length_3211, WB_limits,
-                 maximum_input)
+                 maximum_input, maximum_q_rate, cascaded_actor)
     critic = Critic(Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
                  critic_start_training, gamma, critic_learning_rate, critic_learning_rate_exponent_limit, critic_layers,
                  critic_activations, batch_size, epochs, activate_tensorboard,
