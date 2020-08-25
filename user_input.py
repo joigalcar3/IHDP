@@ -33,7 +33,7 @@ input_magnitude_limits = 25
 input_rate_limits = 60
 
 # Inputs concerning the incremental model
-number_time_steps = 1000
+number_time_steps = 10000
 
 # Inputs concerning the critic
 Q_weights = [100]
@@ -53,7 +53,7 @@ critic_input_tracking_error = True
 WB_limits = 20
 
 # Inputs concerning the actor
-actor_start_training = 6
+actor_start_training = -1
 actor_layers = (20, 1)
 actor_activations = ('tanh', 'tanh')
 actor_learning_rate = 5
@@ -61,8 +61,8 @@ actor_learning_rate_cascaded = 5
 actor_learning_rate_exponent_limit = 10
 only_track_xt_input = False
 actor_input_tracking_error = True
-type_PE = '3211'
-amplitude_3211 = 10
+type_PE = 'combined'
+amplitude_3211 = 15
 pulse_length_3211 = 5/discretisation_time
 maximum_input = 25
 maximum_q_rate = np.deg2rad(20)

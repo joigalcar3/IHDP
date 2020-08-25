@@ -334,6 +334,52 @@ class Critic:
 
         return self.Jt
 
+    def run_train_critic_online_BO_papers_next(self, xt, xt_ref, xt1, xt_ref1):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+        time, it trains the function approximator every number of time steps equal to the chosen batch size.
+        :param xt: current time step states
+        :param xt_ref: current time step reference states for the computation of the one-step cost function
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        # Obtain the forward pass of the critic and the derivatives of the output with respect to the weights and biases
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        nn_input1, dJt_dW1, _ = self.compute_forward_pass(xt1, xt_ref1, replay=True)
+
+        # Obtain the derivative of the loss with respect to the critic NN output (Jt)
+        tracked_states = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
+        xt1_error = np.reshape(tracked_states - xt_ref1, [-1, 1])
+        nn_input1 = tf.constant(np.array([(xt1_error)]).astype('float32'))
+
+        Jt1 = self.model(nn_input1).numpy()
+        self.store_J_1[:, self.time_step] = np.reshape(Jt1, [-1])
+        target = np.reshape(-self.ct - self.gamma * Jt1, [-1, 1])
+
+        dE_dJ = target + self.Jt
+
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW)):
+                gradient = dE_dJ * dJt_dW[count]
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * gradient, self.model.trainable_variables[count].shape))
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+
+                if count % 2 == 1:
+                    self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
+
+            # Update the learning rate
+            self.learning_rate = max(self.learning_rate * 0.995, 0.000001)
+
+        # Check the impact of the update on the critic loss function
+        updated_Jt = self.model(nn_input)
+        updated_Jt1 = self.model(nn_input1)
+        ec_critic_after = np.reshape(-self.ct - self.gamma * updated_Jt1.numpy(), [-1, 1]) + updated_Jt
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        return self.Jt
+
     def train_critic_replay_adam(self, replay_size, iteration):
         """
         Function that trains the critic with values stored in the replay.

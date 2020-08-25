@@ -186,11 +186,11 @@ class Actor:
                 q_ref = self.model(nn_input_alpha)
             self.dq_ref_dWb = tape.gradient(q_ref, self.model.trainable_variables)
 
-            if self.layers[-1] == 'sigmoid':
+            if self.activations[-1] == 'sigmoid':
                 q_ref = max(min((2 * self.maximum_q_rate * q_ref.numpy()) - self.maximum_q_rate,
                                 np.reshape(self.maximum_q_rate, q_ref.numpy().shape)),
                             np.reshape(-self.maximum_q_rate, q_ref.numpy().shape))
-            elif self.layers[-1] == 'tanh':
+            elif self.activations[-1] == 'tanh':
                 q_ref = max(min((self.maximum_q_rate * q_ref.numpy()),
                                 np.reshape(self.maximum_q_rate, q_ref.numpy().shape)),
                             np.reshape(-self.maximum_q_rate, q_ref.numpy().shape))
@@ -232,16 +232,22 @@ class Actor:
             # ut = self.model(nn_input)
 
         e0 = self.compute_persistent_excitation()
-        if self.layers[-1] == 'sigmoid':
+        if self.activations[-1] == 'sigmoid':
             self.ut = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input + e0,
                               np.reshape(self.maximum_input, ut.numpy().shape)),
                           np.reshape(-self.maximum_input, ut.numpy().shape))
-        elif self.layers[-1] == 'tanh':
+            ut_clean = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input,
+                              np.reshape(self.maximum_input, ut.numpy().shape)),
+                          np.reshape(-self.maximum_input, ut.numpy().shape))
+        elif self.activations[-1] == 'tanh':
             self.ut = max(min((self.maximum_input * ut.numpy()) + e0,
                               np.reshape(self.maximum_input, ut.numpy().shape)),
                           np.reshape(-self.maximum_input, ut.numpy().shape))
+            ut_clean = max(min((self.maximum_input * ut.numpy()),
+                              np.reshape(self.maximum_input, ut.numpy().shape)),
+                          np.reshape(-self.maximum_input, ut.numpy().shape))
 
-        return self.ut
+        return self.ut, ut_clean
 
     def train_actor_online(self, Jt1, dJt1_dxt1, G):
         """
@@ -456,18 +462,18 @@ class Actor:
 
             # Train the actor
             Jt1 = Jt1.flatten()[0]
-            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T,
-                                         max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T,dJt1_dxt1)
+                                         # max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
 
             chain_rule = chain_rule.flatten()[0]
             if self.time_step > self.start_training:
                 for count in range(len(self.dut_dWb)):
-                    if self.layers[-1] == 'sigmoid':
+                    if self.activations[-1] == 'sigmoid':
                         gradient = 2 * self.maximum_input * chain_rule * self.dut_dWb[count]
-                    elif self.layers[-1] == 'tanh':
+                    elif self.activations[-1] == 'tanh':
                         gradient = self.maximum_input * chain_rule * self.dut_dWb[count]
                     self.model_q.trainable_variables[count].assign_sub(np.reshape(self.learning_rate_cascaded * gradient,
-                                                                                self.model_q.trainable_variables[
+                                                                                  self.model_q.trainable_variables[
                                                                                     count].shape))
                     # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
                     WB_variable = self.model_q.trainable_variables[count].numpy()
@@ -478,7 +484,10 @@ class Actor:
                     if count % 2 == 1:
                         self.model_q.trainable_variables[count].assign(np.zeros(self.model_q.trainable_variables[count].shape))
                 for count in range(len(self.dq_ref_dWb)):
-                    gradient = -2 * self.maximum_q_rate * chain_rule * self.dut_dq_ref * self.dq_ref_dWb[count]
+                    if self.activations[-1] == 'sigmoid':
+                        gradient = -2 * self.maximum_q_rate * chain_rule * self.dut_dq_ref * self.dq_ref_dWb[count]
+                    elif self.activations[-1] == 'tanh':
+                        gradient = -self.maximum_q_rate * chain_rule * self.dut_dq_ref * self.dq_ref_dWb[count]
                     self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * gradient,
                                                                                   self.model.trainable_variables[
                                                                                       count].shape))
@@ -632,11 +641,11 @@ class Actor:
             nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
 
             q_ref_0 = self.model(nn_input)
-            if self.layers[-1] == 'sigmoid':
+            if self.activations[-1] == 'sigmoid':
                 q_ref = max(min((2 * self.maximum_q_rate * q_ref_0.numpy()) - self.maximum_q_rate,
                                 np.reshape(self.maximum_q_rate, q_ref_0.numpy().shape)),
                             np.reshape(-self.maximum_q_rate, q_ref_0.numpy().shape))
-            elif self.layers[-1] == 'tanh':
+            elif self.activations[-1] == 'tanh':
                 q_ref = max(min((self.maximum_q_rate * q_ref_0.numpy()),
                                 np.reshape(self.maximum_q_rate, q_ref_0.numpy().shape)),
                             np.reshape(-self.maximum_q_rate, q_ref_0.numpy().shape))
@@ -662,11 +671,11 @@ class Actor:
         else:
             e0 = self.compute_persistent_excitation()
 
-        if self.layers[-1] == 'sigmoid':
+        if self.activations[-1] == 'sigmoid':
             ut = max(min((2 * self.maximum_input * ut) - self.maximum_input + e0,
                               np.reshape(self.maximum_input, ut.shape)),
                           np.reshape(-self.maximum_input, ut.shape))
-        elif self.layers[-1] == 'tanh':
+        elif self.activations[-1] == 'tanh':
             ut = max(min((self.maximum_input * ut) + e0,
                               np.reshape(self.maximum_input, ut.shape)),
                           np.reshape(-self.maximum_input, ut.shape))

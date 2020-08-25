@@ -46,8 +46,8 @@ class IncrementalModel:
         self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
 
         # Define the system identification matrices
-        self.F = None
-        self.G = None
+        self.F = np.zeros((self.number_states, self.number_states))
+        self.G = np.zeros((self.number_states, self.number_inputs))
 
         # Define the time variable
         self.time_step = 0
@@ -152,8 +152,29 @@ class IncrementalModel:
                          np.array([[self.input_magnitude_limits]])),
                      - np.array([[self.input_magnitude_limits]]))
 
-            delta_ut = ut - self.ut_1
+            self.ut = ut
+            delta_ut = self.ut - self.ut_1
             xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, delta_ut)
+            return xt1_est
+        elif len(args) == 2:
+            self.xt = args[0]
+            ut_0 = args[1]
+            if self.time_step == 0:
+                self.ut_1 = ut_0
+                self.xt_1 = self.xt
+            # Estimate the next time step states
+
+            ut = max(min(max(min(ut_0,
+                                 np.reshape(np.array([self.ut_1 + self.input_rate_limits * self.discretisation_time]),
+                                            [-1, 1])),
+                             np.reshape(np.array([self.ut_1 - self.input_rate_limits * self.discretisation_time]),
+                                        [-1, 1])),
+                         np.array([[self.input_magnitude_limits]])),
+                     - np.array([[self.input_magnitude_limits]]))
+
+            self.delta_ut = ut - self.ut_1
+            self.delta_xt = self.xt - self.xt_1
+            xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, self.delta_ut)
             return xt1_est
 
     def update_incremental_model_attributes(self):
