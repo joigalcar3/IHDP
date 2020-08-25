@@ -186,9 +186,14 @@ class Actor:
                 q_ref = self.model(nn_input_alpha)
             self.dq_ref_dWb = tape.gradient(q_ref, self.model.trainable_variables)
 
-            q_ref = max(min((2 * self.maximum_q_rate * q_ref.numpy()) - self.maximum_q_rate,
-                            np.reshape(self.maximum_q_rate, q_ref.numpy().shape)),
-                        np.reshape(-self.maximum_q_rate, q_ref.numpy().shape))
+            if self.layers[-1] == 'sigmoid':
+                q_ref = max(min((2 * self.maximum_q_rate * q_ref.numpy()) - self.maximum_q_rate,
+                                np.reshape(self.maximum_q_rate, q_ref.numpy().shape)),
+                            np.reshape(-self.maximum_q_rate, q_ref.numpy().shape))
+            elif self.layers[-1] == 'tanh':
+                q_ref = max(min((self.maximum_q_rate * q_ref.numpy()),
+                                np.reshape(self.maximum_q_rate, q_ref.numpy().shape)),
+                            np.reshape(-self.maximum_q_rate, q_ref.numpy().shape))
 
             self.store_q[:, self.time_step] = q_ref
 
@@ -227,9 +232,14 @@ class Actor:
             # ut = self.model(nn_input)
 
         e0 = self.compute_persistent_excitation()
-        self.ut = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input + e0,
-                          np.reshape(self.maximum_input, ut.numpy().shape)),
-                      np.reshape(-self.maximum_input, ut.numpy().shape))
+        if self.layers[-1] == 'sigmoid':
+            self.ut = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input + e0,
+                              np.reshape(self.maximum_input, ut.numpy().shape)),
+                          np.reshape(-self.maximum_input, ut.numpy().shape))
+        elif self.layers[-1] == 'tanh':
+            self.ut = max(min((self.maximum_input * ut.numpy()) + e0,
+                              np.reshape(self.maximum_input, ut.numpy().shape)),
+                          np.reshape(-self.maximum_input, ut.numpy().shape))
 
         return self.ut
 
@@ -452,7 +462,10 @@ class Actor:
             chain_rule = chain_rule.flatten()[0]
             if self.time_step > self.start_training:
                 for count in range(len(self.dut_dWb)):
-                    gradient = 2 * self.maximum_input * chain_rule * self.dut_dWb[count]
+                    if self.layers[-1] == 'sigmoid':
+                        gradient = 2 * self.maximum_input * chain_rule * self.dut_dWb[count]
+                    elif self.layers[-1] == 'tanh':
+                        gradient = self.maximum_input * chain_rule * self.dut_dWb[count]
                     self.model_q.trainable_variables[count].assign_sub(np.reshape(self.learning_rate_cascaded * gradient,
                                                                                 self.model_q.trainable_variables[
                                                                                     count].shape))
@@ -474,8 +487,8 @@ class Actor:
                         self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
 
                 # Update the learning rate
-                self.learning_rate = max(self.learning_rate * 0.995, 0.001)
-                self.learning_rate_cascaded = max(self.learning_rate_cascaded * 0.995, 0.001)
+                self.learning_rate = max(self.learning_rate * 0.9995, 0.0001)
+                self.learning_rate_cascaded = max(self.learning_rate_cascaded * 0.9995, 0.0001)
             # Code for checking if the actor NN error with the new weights has changed sign
             ut_after = self.evaluate_actor()
             # incremental_model.identify_incremental_model_LS(self.xt, ut_after)
@@ -544,16 +557,37 @@ class Actor:
                             np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
                             np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)
         elif self.type_PE == '3211':
-            if t < 3 * self.pulse_length_3211:
+            if t < 3 * self.pulse_length_3211/7:
+                e0 = 0.5 * self.amplitude_3211
+            elif t < 5 * self.pulse_length_3211/7:
+                e0 = -0.5 * self.amplitude_3211
+            elif t < 6 * self.pulse_length_3211/7:
                 e0 = self.amplitude_3211
-            elif t < 5 * self.pulse_length_3211:
-                e0 = -self.amplitude_3211
-            elif t < 6 * self.pulse_length_3211:
-                e0 = self.amplitude_3211
-            elif t < 7 * self.pulse_length_3211:
+            elif t < self.pulse_length_3211:
                 e0 = -self.amplitude_3211
             else:
                 e0 = 0
+
+        elif self.type_PE == 'combined':
+            e0_1 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
+                            np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
+                            np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)/10
+
+            # e0_1 = np.sin(t) * np.cos(2 * t) * (np.sin(3 * t + np.pi / 4) + np.cos(4 * t - np.pi / 3)) * 1e-2
+
+            if t < 3 * self.pulse_length_3211/7:
+                e0_2 = 0.5 * self.amplitude_3211
+            elif t < 5 * self.pulse_length_3211/7:
+                e0_2 = -0.5 * self.amplitude_3211
+            elif t < 6 * self.pulse_length_3211/7:
+                e0_2 = self.amplitude_3211
+            elif t < self.pulse_length_3211:
+                e0_2 = -self.amplitude_3211
+            else:
+                e0_2 = 0
+
+            e0 = e0_1 + e0_2
+
         else:
             e0 = 0
 
@@ -598,9 +632,14 @@ class Actor:
             nn_input = tf.constant(np.array([(xt_error)]).astype('float32'))
 
             q_ref_0 = self.model(nn_input)
-            q_ref = max(min((2 * self.maximum_q_rate * q_ref_0.numpy()) - self.maximum_q_rate,
-                            np.reshape(self.maximum_q_rate, q_ref_0.numpy().shape)),
-                        np.reshape(-self.maximum_q_rate, q_ref_0.numpy().shape))
+            if self.layers[-1] == 'sigmoid':
+                q_ref = max(min((2 * self.maximum_q_rate * q_ref_0.numpy()) - self.maximum_q_rate,
+                                np.reshape(self.maximum_q_rate, q_ref_0.numpy().shape)),
+                            np.reshape(-self.maximum_q_rate, q_ref_0.numpy().shape))
+            elif self.layers[-1] == 'tanh':
+                q_ref = max(min((self.maximum_q_rate * q_ref_0.numpy()),
+                                np.reshape(self.maximum_q_rate, q_ref_0.numpy().shape)),
+                            np.reshape(-self.maximum_q_rate, q_ref_0.numpy().shape))
 
             tracked_states = np.reshape(xt[self.indices_tracking_states[1], :], [-1, 1])
             xt_error_q = np.reshape(tracked_states - np.reshape(q_ref, tracked_states.shape), [-1, 1])
@@ -622,8 +661,15 @@ class Actor:
             e0 = self.compute_persistent_excitation(time_step)
         else:
             e0 = self.compute_persistent_excitation()
-        ut = max(min((2 * self.maximum_input * ut) - self.maximum_input + e0, self.maximum_input),
-                 - self.maximum_input)
+
+        if self.layers[-1] == 'sigmoid':
+            ut = max(min((2 * self.maximum_input * ut) - self.maximum_input + e0,
+                              np.reshape(self.maximum_input, ut.shape)),
+                          np.reshape(-self.maximum_input, ut.shape))
+        elif self.layers[-1] == 'tanh':
+            ut = max(min((self.maximum_input * ut) + e0,
+                              np.reshape(self.maximum_input, ut.shape)),
+                          np.reshape(-self.maximum_input, ut.shape))
         return ut
 
     def restart_actor(self):
