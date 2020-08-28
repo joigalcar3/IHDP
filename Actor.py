@@ -136,7 +136,7 @@ class Actor:
             self.store_weights['W' + str(counter + 2)] = np.zeros(
                 (self.layers[counter] * self.layers[counter + 1], self.number_time_steps))
             self.store_weights['W' + str(counter + 2)][:, self.time_step] = self.model.trainable_variables[
-                counter * 2].numpy().flatten()
+                (counter+1) * 2].numpy().flatten()
 
         # Second Neural Network for the cascaded actor
         if self.cascaded_actor:
@@ -144,24 +144,25 @@ class Actor:
             tracking_states = ['alpha', 'q']
             self.indices_tracking_states = [self.selected_states.index(tracking_states[i]) for i in range(len(tracking_states))]
             self.number_tracking_states = len(tracking_states)
-
+            initializer = tf.keras.initializers.VarianceScaling(
+                scale=0.01, mode='fan_in', distribution='truncated_normal', seed=1)
             self.model_q = tf.keras.Sequential()
             self.model_q.add(Flatten(input_shape=(1, 1), name='Flatten_1'))
             self.model_q.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
                                    name='dense_1'))
 
             self.store_weights_q['W1'] = np.zeros((self.layers[0], self.number_time_steps))
-            self.store_weights_q['W1'][:, self.time_step] = self.model.trainable_variables[0].numpy().flatten()
+            self.store_weights_q['W1'][:, self.time_step] = self.model_q.trainable_variables[0].numpy().flatten()
 
             for counter, layer in enumerate(self.layers[1:]):
                 self.model_q.add(Dense(self.layers[counter + 1], activation=self.activations[counter + 1],
                                        kernel_initializer=initializer, name='dense_' + str(counter + 2)))
                 self.store_weights_q['W' + str(counter + 2)] = np.zeros(
                     (self.layers[counter] * self.layers[counter + 1], self.number_time_steps))
-                self.store_weights_q['W' + str(counter + 2)][:, self.time_step] = self.model.trainable_variables[
-                    counter * 2].numpy().flatten()
+                self.store_weights_q['W' + str(counter + 2)][:, self.time_step] = self.model_q.trainable_variables[
+                    (counter+1) * 2].numpy().flatten()
 
-        for count in range(len(self.model.trainable_variables)):
+        for count in range(len(self.model.trainable_variables) * 2):
             self.momentum_dict[count] = 0
             self.rmsprop_dict[count] = 0
 
@@ -232,22 +233,20 @@ class Actor:
             # ut = self.model(nn_input)
 
         e0 = self.compute_persistent_excitation()
+
         if self.activations[-1] == 'sigmoid':
             self.ut = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input + e0,
                               np.reshape(self.maximum_input, ut.numpy().shape)),
                           np.reshape(-self.maximum_input, ut.numpy().shape))
-            ut_clean = max(min((2 * self.maximum_input * ut.numpy()) - self.maximum_input,
-                              np.reshape(self.maximum_input, ut.numpy().shape)),
-                          np.reshape(-self.maximum_input, ut.numpy().shape))
         elif self.activations[-1] == 'tanh':
-            self.ut = max(min((self.maximum_input * ut.numpy()) + e0,
+            ut = max(min((self.maximum_input * ut.numpy()),
                               np.reshape(self.maximum_input, ut.numpy().shape)),
                           np.reshape(-self.maximum_input, ut.numpy().shape))
-            ut_clean = max(min((self.maximum_input * ut.numpy()),
-                              np.reshape(self.maximum_input, ut.numpy().shape)),
-                          np.reshape(-self.maximum_input, ut.numpy().shape))
+            self.ut = max(min(ut + e0,
+                              np.reshape(self.maximum_input, ut.shape)),
+                          np.reshape(-self.maximum_input, ut.shape))
 
-        return self.ut, ut_clean
+        return self.ut
 
     def train_actor_online(self, Jt1, dJt1_dxt1, G):
         """
@@ -260,8 +259,8 @@ class Actor:
         """
         Jt1 = Jt1.flatten()[0]
         if self.input_tracking_error:
-            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T,
-                                         max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T, dJt1_dxt1)
+
         else:
             chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
         chain_rule = chain_rule.flatten()[0]
@@ -404,6 +403,128 @@ class Actor:
         Ec_actor_after = 0.5 * np.square(Jt1_after)
         print("ACTOR LOSS xt1 after= ", Ec_actor_after)
 
+    def train_actor_online_BO_papers_adam(self, Jt1, dJt1_dxt1, G, incremental_model, critic, system, xt_ref1):
+        """
+        Train the actor with an adaptive alpha depending on the sign and magnitude of the network errors
+        :param Jt1: the evaluation of the critic with the next time step prediction of the incremental model
+        :param dJt1_dxt1: the gradient of the critic network with respect to the next time prediction of the incremental model
+        :param G: the input distribution matrix
+        :param indices_tracking_states: the states of the system that are being tracked
+        :param incremental_model: the incremental model
+        :param critic: the critic
+        :return:
+        """
+        if self.cascaded_actor:
+            Ec_actor_before = 0.5 * np.square(Jt1)
+            print("ACTOR LOSS xt1 before= ", Ec_actor_before)
+
+            # Train the actor
+            Jt1 = Jt1.flatten()[0]
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T, dJt1_dxt1)
+
+            chain_rule = chain_rule.flatten()[0]
+            if self.time_step > self.start_training and np.abs(self.ut) < 25:
+                for count in range(len(self.dut_dWb)):
+                    if self.activations[-1] == 'sigmoid':
+                        gradient = 2 * self.maximum_input * chain_rule * self.dut_dWb[count]
+                    elif self.activations[-1] == 'tanh':
+                        gradient = self.maximum_input * chain_rule * self.dut_dWb[count]
+
+                    momentum = self.beta_momentum * self.momentum_dict[count] + (1 - self.beta_momentum) * gradient
+                    self.momentum_dict[count] = momentum
+                    momentum_corrected = momentum / (1 - np.power(self.beta_momentum, self.time_step + 1))
+
+                    rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
+                              (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
+                    self.rmsprop_dict[count] = rmsprop
+                    rmsprop_corrected = rmsprop / (1 - np.power(self.beta_rmsprop, self.time_step + 1))
+
+                    update = momentum_corrected / (np.sqrt(rmsprop_corrected) + self.epsilon)
+                    self.model_q.trainable_variables[count].assign_sub(np.reshape(self.learning_rate_cascaded * update,
+                                                                                  self.model_q.trainable_variables[
+                                                                                    count].shape))
+                    # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                    WB_variable = self.model_q.trainable_variables[count].numpy()
+                    WB_variable[WB_variable > self.WB_limits] = self.WB_limits
+                    WB_variable[WB_variable < -self.WB_limits] = -self.WB_limits
+                    self.model_q.trainable_variables[count].assign(WB_variable)
+                    self.check_WB_limits(count)
+                    if count % 2 == 1:
+                        self.model_q.trainable_variables[count].assign(np.zeros(self.model_q.trainable_variables[count].shape))
+
+                for count in range(len(self.dq_ref_dWb)):
+                    if self.activations[-1] == 'sigmoid':
+                        gradient = -2 * self.maximum_q_rate * chain_rule * self.dut_dq_ref * self.dq_ref_dWb[count]
+                    elif self.activations[-1] == 'tanh':
+                        gradient = -self.maximum_q_rate * chain_rule * self.dut_dq_ref * self.dq_ref_dWb[count]
+
+                    momentum = self.beta_momentum * self.momentum_dict[len(self.dq_ref_dWb) + count] + (1 - self.beta_momentum) * gradient
+                    self.momentum_dict[len(self.dq_ref_dWb) + count] = momentum
+                    momentum_corrected = momentum / (1 - np.power(self.beta_momentum, self.time_step + 1))
+
+                    rmsprop = self.beta_rmsprop * self.rmsprop_dict[len(self.dq_ref_dWb) + count] + \
+                              (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
+                    self.rmsprop_dict[len(self.dq_ref_dWb) + count] = rmsprop
+                    rmsprop_corrected = rmsprop / (1 - np.power(self.beta_rmsprop, self.time_step + 1))
+
+                    update = momentum_corrected / (np.sqrt(rmsprop_corrected) + self.epsilon)
+                    self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
+                                                                                  self.model.trainable_variables[
+                                                                                      count].shape))
+                    self.check_WB_limits(count)
+                    if count % 2 == 1:
+                        self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
+
+                # Update the learning rate
+                self.learning_rate = max(self.learning_rate * 0.9995, 0.0001)
+                self.learning_rate_cascaded = max(self.learning_rate_cascaded * 0.9995, 0.0001)
+            # Code for checking if the actor NN error with the new weights has changed sign
+            ut_after = self.evaluate_actor()
+            # incremental_model.identify_incremental_model_LS(self.xt, ut_after)
+            xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
+            Jt1_after, _ = critic.evaluate_critic(xt1_est_after, xt_ref1)
+            Ec_actor_after = 0.5 * np.square(Jt1_after)
+            print("ACTOR LOSS xt1 after= ", Ec_actor_after)
+        else:
+            Ec_actor_before = 0.5 * np.square(Jt1)
+            print("ACTOR LOSS xt1 before= ", Ec_actor_before)
+
+            # Train the actor
+            Jt1 = Jt1.flatten()[0]
+            if self.input_tracking_error:
+                chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T, dJt1_dxt1)
+            else:
+                chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
+            chain_rule = chain_rule.flatten()[0]
+            if self.time_step > self.start_training:
+                for count in range(len(self.dut_dWb)):
+                    gradient = chain_rule * self.dut_dWb[count]
+                    momentum = self.beta_momentum * self.momentum_dict[count] + (1 - self.beta_momentum) * gradient
+                    self.momentum_dict[count] = momentum
+                    momentum_corrected = momentum / (1 - np.power(self.beta_momentum, self.time_step + 1))
+
+                    rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
+                              (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
+                    self.rmsprop_dict[count] = rmsprop
+                    rmsprop_corrected = rmsprop / (1 - np.power(self.beta_rmsprop, self.time_step + 1))
+
+                    update = momentum_corrected / (np.sqrt(rmsprop_corrected) + self.epsilon)
+                    self.model.trainable_variables[count].assign_sub(np.reshape(self.learning_rate * update,
+                                                                                self.model.trainable_variables[count].shape))
+                    # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                    self.check_WB_limits(count)
+                    if count % 2 == 1:
+                        self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
+                # Update the learning rate
+                self.learning_rate = max(self.learning_rate * 0.995, 0.001)
+            # Code for checking if the actor NN error with the new weights has changed sign
+            ut_after = self.evaluate_actor()
+            # incremental_model.identify_incremental_model_LS(self.xt, ut_after)
+            xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
+            Jt1_after, _ = critic.evaluate_critic(xt1_est_after, xt_ref1)
+            Ec_actor_after = 0.5 * np.square(Jt1_after)
+            print("ACTOR LOSS xt1 after= ", Ec_actor_after)
+
     def train_actor_online_BO(self, Jt1, dJt1_dxt1, G, incremental_model, critic, system, xt_ref1):
         """
         Train the actor with an adaptive alpha depending on the sign and magnitude of the network errors
@@ -462,11 +583,10 @@ class Actor:
 
             # Train the actor
             Jt1 = Jt1.flatten()[0]
-            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T,dJt1_dxt1)
-                                         # max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
+            chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T, dJt1_dxt1)
 
             chain_rule = chain_rule.flatten()[0]
-            if self.time_step > self.start_training:
+            if self.time_step > self.start_training and np.abs(self.ut) < 25:
                 for count in range(len(self.dut_dWb)):
                     if self.activations[-1] == 'sigmoid':
                         gradient = 2 * self.maximum_input * chain_rule * self.dut_dWb[count]
@@ -512,8 +632,7 @@ class Actor:
             # Train the actor
             Jt1 = Jt1.flatten()[0]
             if self.input_tracking_error:
-                chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states, :], [-1,1]).T,
-                                             max(dJt1_dxt1, np.reshape(0.001, dJt1_dxt1.shape)))
+                chain_rule = Jt1 * np.matmul(np.reshape(G[self.indices_tracking_states[0], :], [-1, 1]).T, dJt1_dxt1)
             else:
                 chain_rule = Jt1 * np.matmul(G.T, dJt1_dxt1)
             chain_rule = chain_rule.flatten()[0]
@@ -571,18 +690,18 @@ class Actor:
             elif t < 5 * self.pulse_length_3211/7:
                 e0 = -0.5 * self.amplitude_3211
             elif t < 6 * self.pulse_length_3211/7:
-                e0 = self.amplitude_3211
+                e0 = 0.8 * self.amplitude_3211
             elif t < self.pulse_length_3211:
                 e0 = -self.amplitude_3211
             else:
                 e0 = 0
 
         elif self.type_PE == 'combined':
-            e0_1 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
-                            np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
-                            np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)/10
+            # e0_1 = 0.3 / t * (np.sin(100 * t) ** 2 * np.cos(100 * t) + np.sin(2 * t) ** 2 * np.cos(0.1 * t) +
+            #                 np.sin(-1.2 * t) ** 2 * np.cos(0.5 * t) + np.sin(t) ** 5 + np.sin(1.12 * t) ** 2 +
+            #                 np.cos(2.4 * t) * np.sin(2.4 * t) ** 3)/10
 
-            # e0_1 = np.sin(t) * np.cos(2 * t) * (np.sin(3 * t + np.pi / 4) + np.cos(4 * t - np.pi / 3)) * 1e-2
+            e0_1 = np.sin(t) * np.cos(2 * t) * (np.sin(3 * t + np.pi / 4) + np.cos(4 * t - np.pi / 3)) * 1e-2
 
             if t < 3 * self.pulse_length_3211/7:
                 e0_2 = 0.5 * self.amplitude_3211
@@ -613,8 +732,9 @@ class Actor:
         for counter in range(len(self.layers)):
             self.store_weights['W' + str(counter+1)][:, self.time_step] = self.model.trainable_variables[counter*2].numpy().flatten()
 
-        for counter in range(len(self.layers)):
-            self.store_weights_q['W' + str(counter+1)][:, self.time_step] = self.model_q.trainable_variables[counter*2].numpy().flatten()
+        if self.cascaded_actor:
+            for counter in range(len(self.layers)):
+                self.store_weights_q['W' + str(counter+1)][:, self.time_step] = self.model_q.trainable_variables[counter*2].numpy().flatten()
 
     def evaluate_actor(self, *args):
         """
@@ -676,7 +796,7 @@ class Actor:
                               np.reshape(self.maximum_input, ut.shape)),
                           np.reshape(-self.maximum_input, ut.shape))
         elif self.activations[-1] == 'tanh':
-            ut = max(min((self.maximum_input * ut) + e0,
+            ut = max(min(((self.maximum_input + 10) * ut) + e0,
                               np.reshape(self.maximum_input, ut.shape)),
                           np.reshape(-self.maximum_input, ut.shape))
         return ut

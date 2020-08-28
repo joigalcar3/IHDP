@@ -152,8 +152,7 @@ class IncrementalModel:
                          np.array([[self.input_magnitude_limits]])),
                      - np.array([[self.input_magnitude_limits]]))
 
-            self.ut = ut
-            delta_ut = self.ut - self.ut_1
+            delta_ut = ut - self.ut_1
             xt1_est = self.xt + np.matmul(self.F, self.delta_xt) + np.matmul(self.G, delta_ut)
             return xt1_est
         elif len(args) == 2:

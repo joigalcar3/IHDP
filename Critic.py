@@ -114,7 +114,7 @@ class Critic:
         """
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=0.01, mode='fan_in', distribution='truncated_normal', seed=None)
+            scale=1, mode='fan_in', distribution='truncated_normal', seed=None)
         # initializer = tf.keras.initializers.VarianceScaling(
         #     scale=1, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
@@ -216,7 +216,7 @@ class Critic:
 
         return self.Jt
 
-    def run_train_critic_online_adam(self, xt, xt_ref, iteration):
+    def run_train_critic_online_adam(self, xt, xt_ref):
         """
         Function that evaluates once the critic neural network and returns the value of J(xt). At the same
         time, it trains the function approximator every number of time steps equal to the chosen batch size.
@@ -237,7 +237,7 @@ class Critic:
         dE_dJ, _, _ = self.compute_loss_derivative()
 
         # Run the Adam optimizer given the gradients
-        self.adam_iteration(dJt_dW, dE_dJ, iteration)
+        self.adam_iteration(dJt_dW, dE_dJ)
 
         # Check the impact of the update on the critic loss function
         updated_Jt = self.model(nn_input)
@@ -246,6 +246,83 @@ class Critic:
         print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         return self.Jt
+
+    def run_train_critic_online_adam_next(self, xt, xt_ref, xt1, xt_ref1):
+        """
+        Function that evaluates once the critic neural network and returns the value of J(xt). At the same
+        time, it trains the function approximator every number of time steps equal to the chosen batch size.
+        :param xt: current time step states
+        :param xt_ref: current time step reference states for the computation of the one-step cost function
+        :return: Jt --> evaluation of the critic at the current time step
+        """
+        # Safe the information in the replay attribute
+        if self.input_include_reference:
+            self.replay.append((self.xt_1, self.xt_ref_1, xt, xt_ref, self.ct_1))
+        else:
+            self.replay.append((self.xt_1, xt, self.ct_1))
+
+        # Obtain the forward pass of the critic and the derivatives of the output with respect to the weights and biases
+        nn_input, dJt_dW = self.compute_forward_pass(xt, xt_ref)
+        nn_input1, dJt_dW1, _ = self.compute_forward_pass(xt1, xt_ref1, replay=True)
+
+        # Obtain the derivative of the loss with respect to the critic NN output (Jt)
+        tracked_states = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
+        xt1_error = np.reshape(tracked_states - xt_ref1, [-1, 1])
+        nn_input1 = tf.constant(np.array([(xt1_error)]).astype('float32'))
+
+        Jt1 = self.model(nn_input1).numpy()
+        self.store_J_1[:, self.time_step] = np.reshape(Jt1, [-1])
+        target = np.reshape(-self.ct - self.gamma * Jt1, [-1, 1])
+
+        dE_dJ = target + self.Jt
+
+        # Run the Adam optimizer given the gradients
+        self.adam_iteration(dJt_dW, dE_dJ)
+
+        # Check the impact of the update on the critic loss function
+        updated_Jt = self.model(nn_input)
+        updated_Jt1 = self.model(nn_input1)
+        ec_critic_after = np.reshape(-self.ct - self.gamma * updated_Jt1.numpy(), [-1, 1]) + updated_Jt
+        Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        print("CRITIC LOSS xt after= ", Ec_critic_after)
+
+        return self.Jt
+
+    def adam_iteration(self, dJt_dW, dE_dJ):
+        """
+        Adam update to all the weights and biases given the derivative of the loss function with respect to the NN
+        output and the derivative of the neural network output with respect to the weights and biases.
+        :param dJt_dW: derivative of the NN output with respect to the weights and biases
+        :param dE_dJ: derivative of the loss function with respect to the NN output
+        :return:
+        """
+        if self.time_step > self.start_training:
+            for count in range(len(dJt_dW)):
+                gradient = dE_dJ * dJt_dW[count]
+                momentum = self.beta_momentum * self.momentum_dict[count] + (1 - self.beta_momentum) * gradient
+                self.momentum_dict[count] = momentum
+                momentum_corrected = momentum / (1 - self.beta_momentum ** (self.time_step + 1))
+                # momentum_corrected = momentum / (1 - self.beta_momentum ** (iteration + 1))
+
+                rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
+                          (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
+                self.rmsprop_dict[count] = rmsprop
+                rmsprop_corrected = rmsprop / (1 - self.beta_rmsprop ** (self.time_step + 1))
+                # rmsprop_corrected = rmsprop / (1 - self.beta_rmsprop ** (iteration + 1))
+
+                update = momentum_corrected / (np.sqrt(rmsprop_corrected) + self.epsilon)
+
+                self.model.trainable_variables[count].assign_sub(
+                    np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
+
+                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
+                self.check_WB_limits(count)
+
+                if count % 2 == 1:
+                    self.model.trainable_variables[count].assign(np.zeros(self.model.trainable_variables[count].shape))
+
+            # Update the learning rate
+            self.learning_rate = max(self.learning_rate * 0.995, 0.000001)
 
     def run_train_critic_online_BO(self, xt, xt_ref):
         """
@@ -428,35 +505,7 @@ class Critic:
             Ec_critic_after = 0.5 * np.square(ec_critic_after)
             print("CRITIC LOSS xt after= ", Ec_critic_after)
 
-    def adam_iteration(self, dJt_dW, dE_dJ, iteration):
-        """
-        Adam update to all the weights and biases given the derivative of the loss function with respect to the NN
-        output and the derivative of the neural network output with respect to the weights and biases.
-        :param dJt_dW: derivative of the NN output with respect to the weights and biases
-        :param dE_dJ: derivative of the loss function with respect to the NN output
-        :return:
-        """
-        if self.time_step > self.start_training:
-            for count in range(len(dJt_dW)):
-                gradient = dE_dJ * dJt_dW[count]
-                momentum = self.beta_momentum * self.momentum_dict[count] + (1 - self.beta_momentum) * gradient
-                self.momentum_dict[count] = momentum
-                momentum_corrected = momentum / (1 - self.beta_momentum ** (self.time_step + 1))
-                # momentum_corrected = momentum / (1 - self.beta_momentum ** (iteration + 1))
 
-                rmsprop = self.beta_rmsprop * self.rmsprop_dict[count] + \
-                          (1 - self.beta_rmsprop) * np.multiply(gradient, gradient)
-                self.rmsprop_dict[count] = rmsprop
-                rmsprop_corrected = rmsprop / (1 - self.beta_rmsprop ** (self.time_step + 1))
-                # rmsprop_corrected = rmsprop / (1 - self.beta_rmsprop ** (iteration + 1))
-
-                update = momentum_corrected / (np.sqrt(rmsprop_corrected) + self.epsilon)
-
-                self.model.trainable_variables[count].assign_sub(
-                    np.reshape(self.learning_rate * update, self.model.trainable_variables[count].shape))
-
-                # Implement WB_limits: the weights and biases can not have values whose absolute value exceeds WB_limits
-                self.check_WB_limits(count)
 
     def compute_forward_pass(self, xt, xt_ref, replay=False):
         """

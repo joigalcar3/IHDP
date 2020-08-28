@@ -108,10 +108,16 @@ class Simulation:
             self.xt_ref = np.reshape(self.reference_signals[:, self.time_step], [-1, 1])
 
             # Obtain the input from the actor
-            ut, ut_clean = self.actor.run_actor_online(self.xt, self.xt_ref)
+            ut = self.actor.run_actor_online(self.xt, self.xt_ref)
+
+            # Run the system
+            xt1 = self.system.run_step(ut)
+
+            # Identify the incremental model
+            G = self.incremental_model.identify_incremental_model_LS(self.xt, ut)
 
             # Run the incremental model
-            xt1_est = self.incremental_model.evaluate_incremental_model(self.xt, ut_clean)
+            xt1_est = self.incremental_model.evaluate_incremental_model()
 
             # Run and train the critic model
             xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
@@ -119,13 +125,14 @@ class Simulation:
             # _ = self.critic.run_train_critic_online_momentum(self.xt, self.xt_ref)
             # _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref, self.iteration)
             # _ = self.critic.run_train_critic_online_BO(self.xt, self.xt_ref)
-            # _ = self.critic.run_train_critic_online_BO_papers(self.xt, self.xt_ref)
-            _ = self.critic.run_train_critic_online_BO_papers_next(self.xt, self.xt_ref, xt1_est, xt_ref1)
+            _ = self.critic.run_train_critic_online_BO_papers(self.xt, self.xt_ref)
+            # _ = self.critic.run_train_critic_online_BO_papers_next(self.xt, self.xt_ref, xt1_est, xt_ref1)
+            # _ = self.critic.run_train_critic_online_adam_next(self.xt, self.xt_ref, xt1_est, xt_ref1)
 
             # Evaluate the critic
-            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
+            # Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
             # self.critic.train_critic_replay_adam(10, self.iteration)
-            # Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1, [-1, 1]), xt_ref1)
+            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1, [-1, 1]), xt_ref1)
 
             # Train the actor
             # self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G,
@@ -138,12 +145,8 @@ class Simulation:
             #                                  self.incremental_model, self.critic, self.system, xt_ref1)
             self.actor.train_actor_online_BO_papers(Jt1, dJt1_dxt1, G,
                                                     self.incremental_model, self.critic, self.system, xt_ref1)
-
-            # Run the system
-            xt1 = self.system.run_step(ut)
-
-            # Identify the incremental model
-            G = self.incremental_model.identify_incremental_model_LS(self.xt, ut)
+            # self.actor.train_actor_online_BO_papers_adam(Jt1, dJt1_dxt1, G,
+            #                                              self.incremental_model, self.critic, self.system, xt_ref1)
 
             # Update models attributes
             self.system.update_system_attributes()
@@ -155,7 +158,7 @@ class Simulation:
             self.xt = xt1
             self.xt_track = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
 
-            if self.time_step % 50 == 0:
+            if self.time_step % 200 == 0:
                 max_x_frame = 0
                 self.plot_state_results(max_x_frame)
                 self.plot_input_results(max_x_frame)
@@ -163,6 +166,7 @@ class Simulation:
                 self.plot_weights_critic(max_x_frame)
                 self.plot_weights_actor(max_x_frame)
                 self.plot_q_difference(max_x_frame)
+                self.compute_performance()
 
     def plot_state_results(self, max_x_frame):
         """
@@ -299,6 +303,16 @@ class Simulation:
         plt.grid(True)
         plt.pause(0.0001)
         plt.show()
+
+    def compute_performance(self):
+        x = self.system.store_states[self.indices_tracking_states[0], :min(len(self.time), self.time_step)]
+        x_ref = self.reference_signals[0, :min(len(self.time), self.time_step)]
+
+        RMSE = np.sqrt(np.sum(np.power((x-x_ref), 2)/x.shape[0]))
+        print("The current RMSE is ", RMSE)
+
+
+
 
     def restart_iteration(self):
         """

@@ -186,6 +186,8 @@ class F16System(System):
                          np.reshape(np.array([ut_1 - self.input_rate_limits * self.discretisation_time]), [-1, 1])),
                      np.array([[self.input_magnitude_limits]])),
                  - np.array([[self.input_magnitude_limits]]))
+
+
         self.xt1 = np.matmul(self.filt_A, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_B, np.reshape(ut, [-1, 1]))
         # yt = np.matmul(self.filt_C, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_D, np.reshape(ut, [-1, 1]))
 
