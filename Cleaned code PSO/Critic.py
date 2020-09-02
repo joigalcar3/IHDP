@@ -151,7 +151,6 @@ class Critic:
             updated_Jt = self.model(nn_input)
             ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
             Ec_critic_after = 0.5 * np.square(ec_critic_after)
-            print("CRITIC LOSS xt after= ", Ec_critic_after)
 
             # In the case that the error is not decreased, the time step is repeated with half the learning rate
             if Ec_critic_after <= EC_critic_before or n_reductions > 10:
@@ -188,12 +187,6 @@ class Critic:
 
         # Run the Adam optimizer given the gradients
         self.adam_iteration(dJt_dW, dE_dJ)
-
-        # Check the impact of the update on the critic loss function
-        updated_Jt = self.model(nn_input)
-        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + self.Jt_1
-        Ec_critic_after = 0.5 * np.square(ec_critic_after)
-        print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         return self.Jt
 
@@ -269,9 +262,6 @@ class Critic:
         # Check the impact of the update on the critic loss function
         updated_Jt = self.model(nn_input)
         updated_Jt_1 = self.model(nn_input_1)
-        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + updated_Jt_1
-        Ec_critic_after = 0.5 * np.square(ec_critic_after)
-        print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         return self.Jt
 
@@ -309,14 +299,6 @@ class Critic:
 
             # Carry out the Adam optimisation
             self.adam_iteration(dJt_dW, dE_dJ, iteration)
-
-            # Check the impact of the training to the loss function of the critic
-            updated_Jt = self.model(nn_input)
-            ec_critic_after = self.targets_computation_online(updated_Jt, ct_1) + Jt_1
-            Ec_critic_after = 0.5 * np.square(ec_critic_after)
-            print("CRITIC LOSS xt after= ", Ec_critic_after)
-
-
 
     def compute_forward_pass(self, xt, xt_ref, replay=False):
         """
@@ -378,7 +360,6 @@ class Critic:
             nn_input_1 = tf.constant(np.array([(xt_1_error)]).astype('float32'))
 
             self.Jt_1 = self.model(nn_input_1).numpy()
-            Jt = self.Jt
             target = self.targets_computation_online()
         elif len(args) == 3:
             self.Jt_1 = args[0]
@@ -387,7 +368,6 @@ class Critic:
             target = self.targets_computation_online(Jt, ct_1)
         else:
             self.Jt_1 = 0
-            Jt = 0
             target = 0
             Exception("Unexpected number of arguments.")
 
@@ -400,9 +380,6 @@ class Critic:
 
         # Check what is the critic and actor loss values before the critic network update.
         EC_critic_before = 0.5 * np.square(ec_critic_before)
-        Ec_actor_before = 0.5 * np.square(Jt)
-        print("CRITIC LOSS xt before= ", EC_critic_before)
-        print("ACTOR LOSS xt = ", Ec_actor_before)
 
         return dE_dJ, ec_critic_before, EC_critic_before
 
