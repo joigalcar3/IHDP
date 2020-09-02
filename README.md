@@ -1,4 +1,4 @@
-# Intelliggent Adaptive Control Using IHDP Applied to F-16 Aircraft
+# Intelligent Adaptive Control Using IHDP Applied to F-16 Aircraft
 Implementation of Incremental Heuristic Dynamic Programming with Neural Networks as Actor and Critic function approximators.
 The algorithm was applied to the longitudinal model of the F-16 aircraft linearised at 5000 [ft] and 300 [ft/s]. The paper
 presenting the theory, the implementation, the results, as well as a sensitivity analysis on the architecture of the controller, the initial conditions,
@@ -9,7 +9,7 @@ the Artificial Neural Network optimizer and the actor/critic learning rates will
 Within this repository you will find 3 other subdirectories, as well as 6 Python 
 files. First, as short description of the folders:
 
-- Linear System: contains the matrices of the F-16 aircraft model linerised at
+- Linear System: contains the matrices of the F-16 aircraft model linearised at
 5000 [ft] and 00 [ft/s].
 - Cloned code PSO: contains the Linear System folder and the 6 Python files, as 
 well as another Python file that carries out the PSO optimisation. The 6 
