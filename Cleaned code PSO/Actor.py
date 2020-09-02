@@ -36,7 +36,7 @@ class Actor:
                  number_time_steps, start_training, layers=(6, 1), activations=('sigmoid', 'sigmoid'), batch_size=1,
                  epochs=1, learning_rate=0.9, learning_rate_cascaded=0.9, learning_rate_exponent_limit=10, only_track_xt_input=False,
                  input_tracking_error=True, type_PE='3211', amplitude_3211=1, pulse_length_3211=15, WB_limits=30,
-                 maximum_input=25, maximum_q_rate=20, cascaded_actor=False, NN_initial=None):
+                 maximum_input=25, maximum_q_rate=20, cascaded_actor=False):
         self.number_inputs = len(selected_inputs)
         self.selected_states = selected_states
         self.number_states = len(selected_states)
@@ -69,7 +69,6 @@ class Actor:
         self.only_track_xt_input = only_track_xt_input
         self.input_tracking_error = input_tracking_error
         self.WB_limits = WB_limits
-        self.NN_initial = NN_initial
 
         # Attributes related to the persistent excitation
         self.type_PE = type_PE
@@ -112,7 +111,7 @@ class Actor:
         # First Neural Network
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=0.01, mode='fan_in', distribution='truncated_normal', seed=self.NN_initial)
+            scale=0.01, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
 
         if self.only_track_xt_input:
@@ -140,12 +139,12 @@ class Actor:
 
         # Second Neural Network for the cascaded actor
         if self.cascaded_actor:
-            print("It is assumed that the input to the NNs is the tracking error.")
+            # print("It is assumed that the input to the NNs is the tracking error.")
             tracking_states = ['alpha', 'q']
             self.indices_tracking_states = [self.selected_states.index(tracking_states[i]) for i in range(len(tracking_states))]
             self.number_tracking_states = len(tracking_states)
             initializer = tf.keras.initializers.VarianceScaling(
-                scale=0.01, mode='fan_in', distribution='truncated_normal', seed=self.NN_initial)
+                scale=0.01, mode='fan_in', distribution='truncated_normal', seed=1)
             self.model_q = tf.keras.Sequential()
             self.model_q.add(Flatten(input_shape=(1, 1), name='Flatten_1'))
             self.model_q.add(Dense(self.layers[0], activation=self.activations[0], kernel_initializer=initializer,
@@ -578,8 +577,8 @@ class Actor:
         :return:
         """
         if self.cascaded_actor:
-            Ec_actor_before = 0.5 * np.square(Jt1)
-            print("ACTOR LOSS xt1 before= ", Ec_actor_before)
+            # Ec_actor_before = 0.5 * np.square(Jt1)
+            # print("ACTOR LOSS xt1 before= ", Ec_actor_before)
 
             # Train the actor
             Jt1 = Jt1.flatten()[0]
@@ -623,8 +622,8 @@ class Actor:
             # incremental_model.identify_incremental_model_LS(self.xt, ut_after)
             xt1_est_after = incremental_model.evaluate_incremental_model(ut_after)
             Jt1_after, _ = critic.evaluate_critic(xt1_est_after, xt_ref1)
-            Ec_actor_after = 0.5 * np.square(Jt1_after)
-            print("ACTOR LOSS xt1 after= ", Ec_actor_after)
+            # Ec_actor_after = 0.5 * np.square(Jt1_after)
+            # print("ACTOR LOSS xt1 after= ", Ec_actor_after)
         else:
             Ec_actor_before = 0.5 * np.square(Jt1)
             print("ACTOR LOSS xt1 before= ", Ec_actor_before)

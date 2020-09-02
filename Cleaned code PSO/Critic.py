@@ -34,7 +34,7 @@ class Critic:
     def __init__(self, Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
                  start_training, gamma=0.8, learning_rate=2, learning_rate_exponent_limit=10, layers=(10, 6, 1),
                  activations=("sigmoid", "sigmoid", "linear"), batch_size=1, epochs=1, activate_tensorboard=False,
-                 input_include_reference=False, input_tracking_error=True, WB_limits=30, NN_initial=None):
+                 input_include_reference=False, input_tracking_error=True, WB_limits=30):
         # Declaration of attributes regarding the states and rewards
         self.number_states = len(selected_states)
         self.number_tracking_states = len(tracking_states)
@@ -74,7 +74,6 @@ class Critic:
         self.activate_tensorboard = activate_tensorboard
         self.input_include_reference = input_include_reference
         self.input_tracking_error = input_tracking_error
-        self.NN_initial = NN_initial
 
         # Declaration of attributes related to the cost function
         if not(0 <= gamma <= 1):
@@ -115,7 +114,7 @@ class Critic:
         """
         # initializer = tf.keras.initializers.GlorotNormal()
         initializer = tf.keras.initializers.VarianceScaling(
-            scale=1, mode='fan_in', distribution='truncated_normal', seed=self.NN_initial)
+            scale=1, mode='fan_in', distribution='truncated_normal', seed=None)
         # initializer = tf.keras.initializers.VarianceScaling(
         #     scale=1, mode='fan_in', distribution='truncated_normal', seed=None)
         self.model = tf.keras.Sequential()
@@ -404,11 +403,11 @@ class Critic:
             self.learning_rate = max(self.learning_rate * 0.995, 0.000001)
 
         # Check the impact of the update on the critic loss function
-        updated_Jt = self.model(nn_input)
-        updated_Jt_1 = self.model(nn_input_1)
-        ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + updated_Jt_1
-        Ec_critic_after = 0.5 * np.square(ec_critic_after)
-        print("CRITIC LOSS xt after= ", Ec_critic_after)
+        # updated_Jt = self.model(nn_input)
+        # updated_Jt_1 = self.model(nn_input_1)
+        # ec_critic_after = np.reshape(-self.ct_1 - self.gamma * updated_Jt.numpy(), [-1, 1]) + updated_Jt_1
+        # Ec_critic_after = 0.5 * np.square(ec_critic_after)
+        # print("CRITIC LOSS xt after= ", Ec_critic_after)
 
         return self.Jt
 
@@ -594,9 +593,9 @@ class Critic:
 
         # Check what is the critic and actor loss values before the critic network update.
         EC_critic_before = 0.5 * np.square(ec_critic_before)
-        Ec_actor_before = 0.5 * np.square(Jt)
-        print("CRITIC LOSS xt before= ", EC_critic_before)
-        print("ACTOR LOSS xt = ", Ec_actor_before)
+        # Ec_actor_before = 0.5 * np.square(Jt)
+        # print("CRITIC LOSS xt before= ", EC_critic_before)
+        # print("ACTOR LOSS xt = ", Ec_actor_before)
 
         return dE_dJ, ec_critic_before, EC_critic_before
 
