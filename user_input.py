@@ -45,22 +45,15 @@ critic_learning_rate = 5
 critic_learning_rate_exponent_limit = 10
 critic_layers = (20, 1)
 critic_activations = ("tanh", "linear")
-batch_size = 1
-epochs = 1
-activate_tensorboard = False
-input_include_reference = False
-critic_input_tracking_error = True
 WB_limits = 30
 
 # Inputs concerning the actor
 actor_start_training = 5
 actor_layers = (20, 1)
 actor_activations = ('tanh', 'tanh')
-actor_learning_rate = 2
+actor_learning_rate = 1
 actor_learning_rate_cascaded = 0.9
 actor_learning_rate_exponent_limit = 10
-only_track_xt_input = False
-actor_input_tracking_error = True
 type_PE = 'combined'
 amplitude_3211 = 15
 pulse_length_3211 = 5/discretisation_time

@@ -6,7 +6,7 @@ performance.
 
 from Actor import Actor
 from Critic import Critic
-from System import System, F16System
+from System import F16System
 from Incremental_model import IncrementalModel
 from Simulation import Simulation
 from user_input import *
@@ -19,7 +19,7 @@ __author__ = "Jose Ignacio de Alvear Cardenas"
 __copyright__ = "Copyright (C) 2020 Jose Ignacio"
 __credits__ = []
 __license__ = "MIT"
-__version__ = "1.0.1"
+__version__ = "2.0.1"
 __maintainer__ = "Jose Ignacio de Alvear Cardenas"
 __email__ = "j.i.dealvearcardenas@student.tudelft.nl"
 __status__ = "Production"
@@ -37,28 +37,21 @@ class PSO_Problem:
         Q_weights = [x[3]]
         gamma = x[4]
 
-        initial_states = np.array([[np.deg2rad(0)], [0]])
-        # print("\n\nOptimisation parameters\n")
-        # print("critic_learning_rate = ", critic_learning_rate)
-        # print("actor_learning_rate = ", actor_learning_rate)
-        # print("actor_learning_rate_cascaded = ", actor_learning_rate_cascaded)
-        # print("Q_weights = ", Q_weights)
-        # print("gamma = ", gamma, "\n")
-
         # Initialise all the elements of the simulation
         actor = Actor(selected_input, selected_states, tracking_states, indices_tracking_states,
-                      number_time_steps, actor_start_training, actor_layers, actor_activations, batch_size,
-                      epochs, actor_learning_rate, actor_learning_rate_cascaded, actor_learning_rate_exponent_limit,
-                      only_track_xt_input,
-                      actor_input_tracking_error, type_PE, amplitude_3211, pulse_length_3211, WB_limits,
-                      maximum_input, maximum_q_rate, cascaded_actor)
+                      number_time_steps, actor_start_training, actor_layers, actor_activations,
+                      actor_learning_rate, actor_learning_rate_cascaded, actor_learning_rate_exponent_limit,
+                      type_PE, amplitude_3211, pulse_length_3211, WB_limits,
+                      maximum_input, maximum_q_rate, cascaded_actor, NN_initial)
+
         critic = Critic(Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
                         critic_start_training, gamma, critic_learning_rate, critic_learning_rate_exponent_limit,
                         critic_layers,
-                        critic_activations, batch_size, epochs, activate_tensorboard,
-                        input_include_reference, critic_input_tracking_error, WB_limits)
+                        critic_activations, WB_limits, NN_initial)
+
         system = F16System(folder, selected_states, selected_output, selected_input, discretisation_time,
                            input_magnitude_limits, input_rate_limits)
+
         incremental_model = IncrementalModel(selected_states, selected_input, number_time_steps, discretisation_time,
                                              input_magnitude_limits, input_rate_limits)
 
@@ -97,23 +90,16 @@ class PSO_Problem:
         return "PSO Function"
 
 if __name__ == "__main__":
-    # b = pg.thread_bfe()
-    # b = pg.default_bfe()
-    # b = pg.bfe()
     b_type = pg.mp_bfe()
-    # b_type.get_pool_size()
     b_type.resize_pool(6)
 
     b = pg.bfe(b_type)
     prob = pg.problem(PSO_Problem(5))
     uda = pg.pso_gen(gen=10)
-    # uda = pg.nspso(gen=2)
     uda.set_bfe(b)
     algo = pg.algorithm(uda)
-    # algo = pg.algorithm(pg.nspso(gen=2))
     algo.set_verbosity(1)
 
-    # print(prob)
     pop = pg.population(prob, size=100)
     pop = algo.evolve(pop)
 

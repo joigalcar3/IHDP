@@ -18,7 +18,7 @@ __author__ = "Jose Ignacio de Alvear Cardenas"
 __copyright__ = "Copyright (C) 2020 Jose Ignacio"
 __credits__ = []
 __license__ = "MIT"
-__version__ = "1.0.1"
+__version__ = "2.0.1"
 __maintainer__ = "Jose Ignacio de Alvear Cardenas"
 __email__ = "j.i.dealvearcardenas@student.tudelft.nl"
 __status__ = "Production"
@@ -30,7 +30,6 @@ class System:
         # Storing arrays
         self.store_states = None
         self.store_input = None
-        # self.store_output = None
 
         # Current state, input and output
         self.x0 = None
@@ -165,7 +164,6 @@ class F16System(System):
 
         self.store_states = np.zeros((self.number_states, self.number_time_steps + 1))
         self.store_input = np.zeros((self.number_inputs, self.number_time_steps))
-        # self.store_output = np.zeros((self.number_outputs, self.number_time_steps))
 
         self.x0 = x0
         self.xt = x0
@@ -187,13 +185,10 @@ class F16System(System):
                      np.array([[self.input_magnitude_limits]])),
                  - np.array([[self.input_magnitude_limits]]))
 
-
         self.xt1 = np.matmul(self.filt_A, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_B, np.reshape(ut, [-1, 1]))
-        # yt = np.matmul(self.filt_C, np.reshape(self.xt, [-1, 1])) + np.matmul(self.filt_D, np.reshape(ut, [-1, 1]))
 
         self.store_input[:, self.time_step] = np.reshape(ut, [ut.shape[0]])
         self.store_states[:, self.time_step + 1] = np.reshape(self.xt1, [self.xt1.shape[0]])
-        # self.store_output[:, self.time_step] = np.reshape(yt, [yt.shape[0]])
 
         return self.xt1
 
@@ -204,14 +199,3 @@ class F16System(System):
         """
         self.xt = self.xt1
         self.time_step += 1
-
-
-
-if __name__ == "__main__":
-    selected_states = ['velocity', 'alpha', 'theta', 'q']
-    selected_output = ['alpha', 'q']
-    selected_input = ['ele']
-    discretisation_time = 0.5
-    folder = "Linear_system"
-
-    sys = F16System(folder, selected_states, selected_output, selected_input, discretisation_time)

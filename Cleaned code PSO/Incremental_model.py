@@ -68,12 +68,10 @@ class IncrementalModel:
         else:
             x_component_1 = np.flip(self.store_delta_xt[:, :self.time_step], 1).T
             x_component_2 = self.store_delta_xt_0[:, :self.L - self.time_step].T
-            # x_component_2 = np.zeros((self.L - self.time_step, self.number_states))
             x_component = np.vstack((x_component_1, x_component_2))
 
             u_component_1 = np.flip(self.store_delta_ut[:, :self.time_step], 1).T
             u_component_2 = self.store_delta_ut_0[:, :self.L - self.time_step].T
-            # u_component_2 = np.zeros((self.L - self.time_step, self.number_inputs))
             u_component = np.vstack((u_component_1, u_component_2))
         A_LS_matrix = np.hstack((x_component, u_component))
         return A_LS_matrix
@@ -85,7 +83,7 @@ class IncrementalModel:
         """
         if self.time_step == 0:
             self.xt_1 = self.xt
-            # self.ut_1 = np.zeros(self.ut.shape)
+
         # Computation and storage of the gradients
         self.delta_xt = self.xt - self.xt_1
         self.delta_ut = self.ut - self.ut_1
@@ -96,7 +94,6 @@ class IncrementalModel:
         else:
             x_component_1 = np.flip(self.store_delta_xt[:, :self.time_step + 1], 1).T
             x_component_2 = self.store_delta_xt_0[:, :self.L - self.time_step - 1].T
-            # x_component_2 = np.zeros((self.L - self.time_step, self.number_states))
             x_LS_vector = np.vstack((x_component_1, x_component_2))
 
         return x_LS_vector

@@ -4,14 +4,13 @@ different components.
 
 Simulation initialises all the components of the controller, namely the System, the Incremental Model, the Actor and the
 Critic, as well as building the required Neural Networks. It counts with a method that executes in the required order
-each of the controller elements during a complete iteration. Also, the "run_simulation" method runs the required
-iterations, as well as restarting the simulation parameters.
+each of the controller elements during a complete iteration.
 """
 
 
 from Actor import Actor
 from Critic import Critic
-from System import System, F16System
+from System import F16System
 from Incremental_model import IncrementalModel
 from user_input import *
 import matplotlib.pyplot as plt
@@ -25,7 +24,7 @@ __author__ = "Jose Ignacio de Alvear Cardenas"
 __copyright__ = "Copyright (C) 2020 Jose Ignacio"
 __credits__ = []
 __license__ = "MIT"
-__version__ = "1.0.1"
+__version__ = "2.0.1"
 __maintainer__ = "Jose Ignacio de Alvear Cardenas"
 __email__ = "j.i.dealvearcardenas@student.tudelft.nl"
 __status__ = "Production"
@@ -83,22 +82,6 @@ class Simulation:
         the simulation attributes
         :return:
         """
-        # while self.iteration < self.iterations:
-        #     # Run a complete iteration
-        #     self.run_iteration()
-        #
-        #     # Restart the elements of an iteration
-        #     # self.restart_iteration()
-        #     # self.time_step = 0
-        #     #
-        #     # # Restart cyclic parameters
-        #     # self.xt = self.initial_states
-        #     # self.xt_track = np.reshape(self.xt[self.indices_tracking_states, self.time_step], [-1, 1])
-        #     #
-        #     # self.iteration += 1
-        #     # plt.close('all')
-        # return self.RMSE
-
         self.run_iteration()
 
         self.compute_performance()
@@ -111,7 +94,6 @@ class Simulation:
         correct order.
         :return:
         """
-        G = self.incremental_model.G
         while self.time_step < self.number_time_steps:
             print(self.time_step)
 
@@ -133,31 +115,20 @@ class Simulation:
             # Run and train the critic model
             xt_ref1 = np.reshape(self.reference_signals[:, self.time_step + 1], [-1, 1])
             # _ = self.critic.run_train_critic_online_adaptive_alpha(self.xt, self.xt_ref)
-            # _ = self.critic.run_train_critic_online_momentum(self.xt, self.xt_ref)
             # _ = self.critic.run_train_critic_online_adam(self.xt, self.xt_ref, self.iteration)
-            # _ = self.critic.run_train_critic_online_BO(self.xt, self.xt_ref)
-            _ = self.critic.run_train_critic_online_BO_papers(self.xt, self.xt_ref)
-            # _ = self.critic.run_train_critic_online_BO_papers_next(self.xt, self.xt_ref, xt1_est, xt_ref1)
-            # _ = self.critic.run_train_critic_online_adam_next(self.xt, self.xt_ref, xt1_est, xt_ref1)
+            _ = self.critic.run_train_critic_online_alpha_decay(self.xt, self.xt_ref)
 
             # Evaluate the critic
-            # Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
             # self.critic.train_critic_replay_adam(10, self.iteration)
-            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1, [-1, 1]), xt_ref1)
+            Jt1, dJt1_dxt1 = self.critic.evaluate_critic(np.reshape(xt1_est, [-1, 1]), xt_ref1)
 
             # Train the actor
             # self.actor.train_actor_online_adaptive_alpha(Jt1, dJt1_dxt1, G,
             #                                    self.incremental_model, self.critic, xt_ref1)
-            # self.actor.train_actor_online_momentum(Jt1, dJt1_dxt1, G,
-            #                                    self.incremental_model, self.critic, xt_ref1)
             # self.actor.train_actor_online_adam(Jt1, dJt1_dxt1, G,
-            #                                    self.incremental_model, self.critic, xt_ref1, self.iteration)
-            # self.actor.train_actor_online_BO(Jt1, dJt1_dxt1, G,
-            #                                  self.incremental_model, self.critic, self.system, xt_ref1)
-            self.actor.train_actor_online_BO_papers(Jt1, dJt1_dxt1, G,
-                                                    self.incremental_model, self.critic, self.system, xt_ref1)
-            # self.actor.train_actor_online_BO_papers_adam(Jt1, dJt1_dxt1, G,
-            #                                              self.incremental_model, self.critic, self.system, xt_ref1)
+            #                                              self.incremental_model, self.critic, xt_ref1)
+            self.actor.train_actor_online_alpha_decay(Jt1, dJt1_dxt1, G,
+                                                      self.incremental_model, self.critic, xt_ref1)
 
             # Update models attributes
             self.system.update_system_attributes()
@@ -169,14 +140,14 @@ class Simulation:
             self.xt = xt1
             self.xt_track = np.reshape(xt1[self.indices_tracking_states, :], [-1, 1])
 
-            if self.time_step % 1000 == 0:
-                # max_x_frame = 0
-                # self.plot_state_results(max_x_frame)
-                # self.plot_input_results(max_x_frame)
-                # self.plot_training_critic(max_x_frame)
-                # self.plot_weights_critic(max_x_frame)
-                # self.plot_weights_actor(max_x_frame)
-                # self.plot_q_difference(max_x_frame)
+            if self.time_step % 500 == 0:
+                max_x_frame = 0
+                self.plot_state_results(max_x_frame)
+                self.plot_input_results(max_x_frame)
+                self.plot_training_critic(max_x_frame)
+                self.plot_weights_critic(max_x_frame)
+                self.plot_weights_actor(max_x_frame)
+                self.plot_q_difference(max_x_frame)
                 self.compute_performance()
 
     def plot_state_results(self, max_x_frame):
@@ -205,6 +176,7 @@ class Simulation:
     def plot_input_results(self, max_x_frame):
         """
         Plots the input to the system to verify that the limits of the platform are not exceeded.
+        :param max_x_frame: the number of time steps ahead of the current time-step to be plotted.
         :return:
         """
         plt.figure(self.iterations + self.iteration)
@@ -218,7 +190,6 @@ class Simulation:
         for i in range(len(self.selected_inputs)):
             plt.subplot(n_rows, n_cols, i+1)
             plt.plot(self.time[:self.time_step + max_x_frame], self.system.store_input[i, :min(len(self.time), self.time_step + max_x_frame)], 'g', label='$u_t$')
-            # plt.plot(self.time[:self.time_step + max_x_frame], self.incremental_model.store_input[i, :min(len(self.time), self.time_step + max_x_frame)], 'y', label='Input incremental model')
             plt.xlabel("Time [s]")
             plt.ylabel("Elevator deflection [deg]")
             plt.legend()
@@ -228,13 +199,13 @@ class Simulation:
     def plot_training_critic(self, max_x_frame):
         """
         Plots the evolution of the target vs Jt_1, the evolution of c and the evolution of the loss function Ec
+        :param max_x_frame: the number of time steps ahead of the current time-step to be plotted.
         :return:
         """
         c = np.hstack((np.zeros((1, 1)), self.critic.store_c[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)]
         targets = c + self.critic.gamma * self.critic.store_J[:, :min(len(self.time), self.time_step + max_x_frame)]
         targets = -targets.T
         c = c.T
-        # Jt_1 = np.hstack((np.zeros((1, 1)), self.critic.store_J[:, :-1]))[:, :min(len(self.time), self.time_step + max_x_frame)].T
         Jt_1 = self.critic.store_J_1[:, :min(len(self.time), self.time_step + max_x_frame)].T
         time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
 
@@ -265,6 +236,11 @@ class Simulation:
         plt.show()
 
     def plot_weights_critic(self, max_x_frame):
+        """
+        Plots the evolution of the weights of the critic with respect to time.
+        :param max_x_frame: the number of time steps ahead of the current time-step to be plotted.
+        :return:
+        """
         n_rows =len(self.critic.store_weights.keys())
         time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
 
@@ -277,7 +253,6 @@ class Simulation:
             for i in range(n_weights):
                 plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
             plt.grid(True)
-            # plt.title('CRITIC: W' + str(weight+1))
             plt.xlabel("Time [s]")
             plt.ylabel("Critic weights layer " + str(weight + 1) + "-" + str(weight + 2) + " [-]")
             plt.pause(0.0001)
@@ -285,6 +260,11 @@ class Simulation:
         plt.show()
 
     def plot_weights_actor(self, max_x_frame):
+        """
+        Plots the evolution of the weights of the actor with respect to time.
+        :param max_x_frame: the number of time steps ahead of the current time-step to be plotted.
+        :return:
+        """
         n_rows =len(self.actor.store_weights.keys())
         time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
 
@@ -297,9 +277,7 @@ class Simulation:
             for i in range(n_weights):
                 plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
             plt.grid(True)
-            # plt.title('ACTOR 1: W' + str(weight+1))
             plt.xlabel("Time [s]")
-            # plt.ylabel("Actor network weights 1 [-]")
             plt.ylabel("Actor 1 weights layer " + str(weight + 1) + "-" + str(weight + 2) + " [-]")
         plt.tight_layout()
 
@@ -313,14 +291,17 @@ class Simulation:
                 for i in range(n_weights):
                     plt.plot(time, W[i, :min(len(self.time), self.time_step + max_x_frame)].T)
                 plt.grid(True)
-                # plt.title('ACTOR 2: W' + str(weight + 1))
                 plt.xlabel("Time [s]")
-                # plt.ylabel("Actor network weights 2 [-]")
                 plt.ylabel("Actor 2 weights layer " + str(weight + 1) + "-" + str(weight + 2) + " [-]")
             plt.tight_layout()
         plt.show()
 
     def plot_q_difference(self, max_x_frame):
+        """
+        Plos the vehicle pitch rate and the reference pitch rate generated by the cascaded actor network
+        :param max_x_frame: the number of time steps ahead of the current time-step to be plotted.
+        :return:
+        """
         time = np.reshape(self.time[:self.time_step + max_x_frame], [1, -1]).T
         plt.figure(6 * self.iterations + self.iteration)
         plt.clf()
@@ -336,14 +317,15 @@ class Simulation:
         plt.show()
 
     def compute_performance(self):
+        """
+        Compute the Root Mean Square error of the tracking task
+        :return:
+        """
         x = self.system.store_states[self.indices_tracking_states[0], :min(len(self.time), self.time_step)]
         x_ref = self.reference_signals[0, :min(len(self.time), self.time_step)]
 
         self.RMSE = np.sqrt(np.sum(np.power((x-x_ref), 2)/x.shape[0]))
         print("The current RMSE is ", self.RMSE)
-
-
-
 
     def restart_iteration(self):
         """
@@ -365,39 +347,41 @@ class Simulation:
 
 if __name__ == "__main__":
     # Initialise all the elements of the simulation
-    RMSE_lst = []
-    actor_learning_rate_range = np.arange(1, 20, 1)
-    for actor_learning_rate in actor_learning_rate_range:
-        actor = Actor(selected_input, selected_states, tracking_states, indices_tracking_states,
-                     number_time_steps, actor_start_training, actor_layers, actor_activations, batch_size,
-                     epochs, actor_learning_rate, actor_learning_rate_cascaded, actor_learning_rate_exponent_limit, only_track_xt_input,
-                     actor_input_tracking_error, type_PE, amplitude_3211, pulse_length_3211, WB_limits,
-                     maximum_input, maximum_q_rate, cascaded_actor, NN_initial)
-        critic = Critic(Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
-                     critic_start_training, gamma, critic_learning_rate, critic_learning_rate_exponent_limit, critic_layers,
-                     critic_activations, batch_size, epochs, activate_tensorboard,
-                     input_include_reference, critic_input_tracking_error, WB_limits, NN_initial)
-        system = F16System(folder, selected_states, selected_output, selected_input, discretisation_time,
-                     input_magnitude_limits, input_rate_limits)
-        incremental_model = IncrementalModel(selected_states, selected_input, number_time_steps, discretisation_time,
-                     input_magnitude_limits, input_rate_limits)
+    # RMSE_lst = []
+    # actor_learning_rate_range = np.arange(1, 20, 1)
+    # for actor_learning_rate in actor_learning_rate_range:
+    actor = Actor(selected_input, selected_states, tracking_states, indices_tracking_states,
+                 number_time_steps, actor_start_training, actor_layers, actor_activations,
+                 actor_learning_rate, actor_learning_rate_cascaded, actor_learning_rate_exponent_limit,
+                  type_PE, amplitude_3211, pulse_length_3211, WB_limits,
+                 maximum_input, maximum_q_rate, cascaded_actor, NN_initial)
 
-        # Initialise the simulation
-        simulation = Simulation(iterations, selected_input, selected_states, selected_output, number_time_steps,
-                     initial_states, reference_signals, actor, critic, system, incremental_model,
-                     discretisation_time, tracking_states)
+    critic = Critic(Q_weights, selected_states, tracking_states, indices_tracking_states, number_time_steps,
+                 critic_start_training, gamma, critic_learning_rate, critic_learning_rate_exponent_limit, critic_layers,
+                 critic_activations, WB_limits, NN_initial)
 
-        # Run the simulation
-        RMSE = simulation.run_simulation()
-        RMSE_lst.append(RMSE)
-        print(RMSE_lst)
+    system = F16System(folder, selected_states, selected_output, selected_input, discretisation_time,
+                 input_magnitude_limits, input_rate_limits)
 
-    plt.figure(100000)
-    plt.plot(actor_learning_rate_range, RMSE_lst)
-    plt.xlabel("Actor learning rate [-]")
-    plt.ylabel("RMSE [-]")
-    plt.grid(True)
-    plt.show()
+    incremental_model = IncrementalModel(selected_states, selected_input, number_time_steps, discretisation_time,
+                 input_magnitude_limits, input_rate_limits)
+
+    # Initialise the simulation
+    simulation = Simulation(iterations, selected_input, selected_states, selected_output, number_time_steps,
+                 initial_states, reference_signals, actor, critic, system, incremental_model,
+                 discretisation_time, tracking_states)
+
+    # Run the simulation
+    RMSE = simulation.run_simulation()
+        # RMSE_lst.append(RMSE)
+        # print(RMSE_lst)
+
+    # plt.figure(100000)
+    # plt.plot(actor_learning_rate_range, RMSE_lst)
+    # plt.xlabel("Actor learning rate [-]")
+    # plt.ylabel("RMSE [-]")
+    # plt.grid(True)
+    # plt.show()
 
 
 
