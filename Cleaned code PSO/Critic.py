@@ -259,9 +259,6 @@ class Critic:
             # Update the learning rate
             self.learning_rate = max(self.learning_rate * 0.995, 0.000001)
 
-        # Check the impact of the update on the critic loss function
-        updated_Jt = self.model(nn_input)
-        updated_Jt_1 = self.model(nn_input_1)
 
         return self.Jt
 
