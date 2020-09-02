@@ -10,7 +10,7 @@ Within this repository you will find 3 other subdirectories, as well as 6 Python
 files. First, as short description of the folders:
 
 - Linear System: contains the matrices of the F-16 aircraft model linearised at
-5000 [ft] and 00 [ft/s].
+5000 [ft] and 300 [ft/s].
 - Cloned code PSO: contains the Linear System folder and the 6 Python files, as 
 well as another Python file that carries out the PSO optimisation. The 6 
 afore-mentioned Python files have been cleaned of printing statements and
