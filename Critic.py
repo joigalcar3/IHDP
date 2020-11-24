@@ -116,9 +116,9 @@ class Critic:
         for counter, layer in enumerate(self.layers[1:]):
             self.model.add(Dense(self.layers[counter+1], activation=self.activations[counter+1],
                                  kernel_initializer=initializer, name='dense_'+str(counter+1)))
-            self.store_weights['W' + str(counter+2)] = np.zeros((self.layers[counter] * self.layers[counter+1], self.number_time_steps + 1))
+            self.store_weights['W' + str(counter + 2)] = np.zeros((self.layers[counter] * self.layers[counter+1], self.number_time_steps + 1))
             self.store_weights['W' + str(counter + 2)][:, self.time_step] = self.model.trainable_variables[
-                counter * 2].numpy().flatten()
+                (counter+1) * 2].numpy().flatten()
 
 
         for count in range(len(self.model.trainable_variables)):
