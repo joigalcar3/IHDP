@@ -47,7 +47,6 @@ olefile=0.46=py_0
 openssl=1.1.1g=he774522_1
 opt-einsum=3.3.0=pypi_0
 pagmo=2.15.0=h16f1493_1
-pillow=7.2.0=py38h7011068_1
 pip=20.2.2=py_0
 protobuf=3.13.0=pypi_0
 pyasn1=0.4.8=pypi_0
