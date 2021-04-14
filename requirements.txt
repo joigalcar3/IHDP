@@ -70,7 +70,7 @@ sqlite=3.33.0=he774522_0
 tbb=2020.1=he980bc4_0
 tensorboard=2.2.2=pypi_0
 tensorboard-plugin-wit=1.7.0=pypi_0
-tensorflow=2.2.0=pypi_0
+tensorflow=2.4.0=pypi_0
 tensorflow-estimator=2.2.0=pypi_0
 termcolor=1.1.0=pypi_0
 tk=8.6.10=he774522_0
