@@ -47,4 +47,4 @@ each of the controller elements during a complete iteration. **MAIN FILE**
 Actor, Critic, System, IncrementalModel and Simulation classes.
 
 Hope you enjoy the code!! For any questions, comments or suggestions, please reach out to me at 
-[j.i.dealvearcardenas@student.tudelft.nl](j.i.dealvearcardenas@student.tudelft.nl).
+[jialvear@hotmail.com](jialvear@hotmail.com).
